@@ -1,0 +1,24 @@
+[project]
+name = "social-insight-mcp"
+version = "0.1.0"
+description = "多平台内容分析 MCP Server（抖音 · 小红书 · 微信视频号占位）"
+requires-python = ">=3.10"
+dependencies = [
+    "mcp>=1.0.0",
+    "httpx>=0.27.0",
+]
+
+[project.optional-dependencies]
+# 本地语义召回（热点预筛）。纯 CPU，无外部 API。
+embed = ["numpy>=1.26", "onnxruntime>=1.17", "tokenizers>=0.15"]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.23"]
+
+[project.scripts]
+social-insight-mcp = "social_insight.server:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
