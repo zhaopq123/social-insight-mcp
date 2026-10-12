@@ -108,7 +108,7 @@ TOOL_DEFS: list[dict[str, Any]] = [
             "`hot_topics` 回答「现在什么火」，本工具回答"
             "「**哪个跟我的号有关**」。\n\n"
             "两种用法：\n"
-            "  · 用预设账号：profile=\"小赵聊软件\" 或 \"小赵无人零售\"\n"
+            "  · 用预设账号：profile=\"tech-blogger\" 或 \"retail-operator\"\n"
             "  · 临时指定：keywords=[...], domains=[...]\n\n"
             "匹配度由三个正交信号加权，且**分开报告命中证据**：\n"
             "  · 领域契合 0.45 —— 属于你的领域吗\n"
@@ -120,7 +120,7 @@ TOOL_DEFS: list[dict[str, Any]] = [
             "score 表示跟你有多相关。很火但不相关的话题不该因为火就排前面。"
         ),
         "inputSchema": _schema(
-            profile=("string", "预设账号名：小赵聊软件 / 小赵无人零售。调用 capabilities 可看全部。"),
+            profile=("string", "预设账号名：tech-blogger / retail-operator。调用 capabilities 可看全部。"),
             keywords=("array", "业务关键词列表。不传 profile 时必填。元素为字符串。"),
             domains=(
                 "array",

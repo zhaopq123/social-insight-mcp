@@ -16,9 +16,8 @@
 
 from __future__ import annotations
 
-import pytest
 
-from social_insight.hot.match import AccountProfile, TopicMatch
+from social_insight.hot.match import TopicMatch
 from social_insight.service import _match_summary
 
 
@@ -46,7 +45,7 @@ class TestReliabilityAssessment:
         这是**最关键的一条**：如果不说明，调用方会误判为「数据不可靠」。
         """
         matches = [mk(0.85, "strong", ["掘金热榜"]) for _ in range(5)]
-        s = _match_summary(matches, "小赵聊软件", ["software"])
+        s = _match_summary(matches, "tech-blogger", ["software"])
 
         assert s["reliability"] == "single-source-domain"
         assert "掘金热榜" in s["advice"]
@@ -82,8 +81,8 @@ class TestReliabilityAssessment:
         assert s["weak_ratio"] == 0.9
 
     def test_includes_profile_and_domains(self):
-        s = _match_summary([mk(0.85, "strong", ["x"])], "小赵聊软件", ["software"])
-        assert s["profile"] == "小赵聊软件"
+        s = _match_summary([mk(0.85, "strong", ["x"])], "tech-blogger", ["software"])
+        assert s["profile"] == "tech-blogger"
         assert s["domains"] == ["software"]
 
     def test_hint_explains_score_vs_corroboration(self):

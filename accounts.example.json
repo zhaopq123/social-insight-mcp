@@ -1,0 +1,53 @@
+{
+  "_readme": [
+    "账号定位配置示例。",
+    "",
+    "用法：把本文件复制为 accounts.local.json 并改成你自己的账号。",
+    "accounts.local.json 已被 .gitignore 忽略，不会被提交。",
+    "",
+    "每个账号的字段：",
+    "  display_name  显示名（给人看的，可为中文）",
+    "  keywords      业务关键词 —— 命中标题时权重最高，是匹配的主力",
+    "  domains       所属领域，决定领域契合度。可用值见 src/social_insight/hot/match.py 的 DOMAIN_LEXICON：",
+    "                software / retail / business / sports / entertainment / finance / politics / tech_hardware",
+    "  platforms     在哪些平台发布（仅供记录，不影响匹配）",
+    "  form          内容形态：image_text（图文）/ video（视频）",
+    "",
+    "⚠️ 写 keywords 的关键经验（实测踩过的坑）：",
+    "  商业类账号必须**同时**写「产品词」与「经营词」。",
+    "",
+    "  只写产品词（如只写「咖啡机、冰淇淋机」）会导致：",
+    "    · 「某品牌门店客流爆满」这类可做话题被判 0 分",
+    "    · 候选池看起来空空如也，误以为「今天没有相关热点」",
+    "",
+    "  补上经营词（门店、客流、成本、消费、品牌、商家）后，",
+    "  同一批热点里的可用候选从 0 个变成 7 个。",
+    "",
+    "  软件/科技类同理：除了「软件、开发、AI」，还要写「获客、客户、订单」——",
+    "  这些号的商业诉求本身就是经营问题。"
+  ],
+
+  "accounts": {
+    "my-tech-account": {
+      "display_name": "我的科技号",
+      "keywords": [
+        "软件", "开发", "编程", "AI", "自动化", "工具", "效率", "系统",
+        "获客", "客户", "订单", "外包"
+      ],
+      "domains": ["software", "business"],
+      "platforms": ["douyin"],
+      "form": "image_text"
+    },
+    "my-retail-account": {
+      "display_name": "我的零售号",
+      "keywords": [
+        "无人零售", "自动售货", "咖啡机", "饮料机", "点位", "设备",
+        "开店", "门店", "租金", "客流", "运营", "成本", "加盟",
+        "零售", "消费", "品牌", "商家", "生意", "经营", "连锁"
+      ],
+      "domains": ["retail", "business"],
+      "platforms": ["xiaohongshu"],
+      "form": "image_text"
+    }
+  }
+}

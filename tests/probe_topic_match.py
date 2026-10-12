@@ -24,7 +24,7 @@ async def main() -> int:
     print()
 
     results = {}
-    for preset_name in ["小赵聊软件", "小赵无人零售"]:
+    for preset_name in ["tech-blogger", "retail-operator"]:
         profile = get_preset(preset_name)
         matches = match_topics(topics, profile, top_n=6)
         results[preset_name] = matches
@@ -41,8 +41,8 @@ async def main() -> int:
 
     # ---- 决定性验收 ----
     print("=" * 70)
-    s_top = {m.word for m in results["小赵聊软件"]}
-    r_top = {m.word for m in results["小赵无人零售"]}
+    s_top = {m.word for m in results["tech-blogger"]}
+    r_top = {m.word for m in results["retail-operator"]}
     overlap = s_top & r_top
 
     print(f"软件号 top6: {len(s_top)} 条")

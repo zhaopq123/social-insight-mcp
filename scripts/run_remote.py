@@ -5,8 +5,8 @@
 
 目标机是 Termux + proot-distro Ubuntu 双层：
 
-    Termux 层    192.168.3.35:8022   用户 zpq   ← 守护循环、tmux 在这层
-    Ubuntu 容器  192.168.3.35:2222   用户 zpq   ← 服务本体跑在这层
+    Termux 层    <host>:8022        用户 <user>  ← 守护循环、tmux 在这层
+    Ubuntu 容器  <host>:2222        用户 <user>  ← 服务本体跑在这层
 
 两层**共享文件系统**（容器可读 Termux 的 home），但**进程命名空间不同**
 （其实是共享的，但 proot 的 --kill-on-exit 决定了谁活谁死）。

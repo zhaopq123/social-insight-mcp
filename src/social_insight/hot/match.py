@@ -32,7 +32,6 @@ embedding 语义匹配更准，但需要：下载模型（~100MB）、装 onnxru
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -45,8 +44,8 @@ from ..models import HotTopic
 #: 领域 → 特征词。命中越多，该热点越可能属于这个领域。
 #:
 #: 这些词是从用户两个账号的实际选题里提炼的（见知识库：
-#: 抖音「小赵聊软件」= 软件/开发/避坑/获客；
-#: 小红书「小赵无人零售」= 无人咖啡机/冰淇淋机/点位/无人零售）。
+#: 抖音「tech-blogger」= 软件/开发/避坑/获客；
+#: 小红书「retail-operator」= 无人咖啡机/冰淇淋机/点位/无人零售）。
 #: 通用领域（体育/娱乐/财经等）用于**反向排除**。
 DOMAIN_LEXICON: dict[str, list[str]] = {
     # ── 用户实际业务领域 ──
@@ -146,7 +145,7 @@ class AccountProfile:
     """账号定位。调用方传入，或从知识库预设读取。"""
 
     name: str = ""
-    """账号名，如「小赵聊软件」。"""
+    """账号名，如「tech-blogger」。"""
 
     keywords: list[str] = field(default_factory=list)
     """业务关键词。这是最强的匹配信号。"""
@@ -230,10 +229,15 @@ class TopicMatch:
 
 
 def _normalize(text: str) -> str:
-    """匹配用归一化：转小写、去噪。保留中文。"""
-    text = (text or "").lower()
-    text = re.sub(r"[\s#＃【】\[\]（）()「」“”\"'、,，。.！!？?~～\-—_·|｜:：;；]+", "", text)
-    return text
+    """匹配用归一化。
+
+    ⚠️ **转发到 corroborate.normalize**，不自己实现一遍。
+    实测踩过：三处各写一份归一化，规则漂移后导致跨模块去重失效
+    （corroborate 认为「【突发】新闻」=「新闻」，这里却认为不同）。
+    """
+    from .corroborate import normalize
+
+    return normalize(text)
 
 
 def _domain_score(text: str, domain: str) -> float:
@@ -386,51 +390,102 @@ def match_topics(
 
 
 # --------------------------------------------------------------------------
-# 预设账号（来自知识库的实测定位）
+# 账号配置（从 accounts.py 加载，支持外置配置文件）
 # --------------------------------------------------------------------------
 
-#: 预设账号定位。**来源**：知识库「抖音 小赵聊软件」「小红书 小赵无人零售」实测页。
+#: 预设账号定位。
 #:
-#: ⚠️ 实测踩过的坑：这两个预设最初只写了**产品**维度的关键词，
-#: 漏了**经营**维度。后果：
-#:   · 零售号只有硬件词（咖啡机/冰淇淋机）→ 门店经营类话题全判 0 分
-#:   · 而「霸王茶姬买一送一崩溃」这类话题恰恰是无人零售号最能做的题材
-#:     （讲活动预案、客流冲击、运营事故）
+#: ⚠️ **不硬编码真实账号**——账号定义外置在 `accounts.local.json`
+#: （已被 .gitignore 忽略），仓库里只有通用示例。
+#: 这样同一份代码既能开源，也能直接用。
 #:
-#: 所以商业类账号的定位必须**同时**包含产品词与经营词。
-PRESET_PROFILES: dict[str, AccountProfile] = {
-    "小赵聊软件": AccountProfile(
-        name="小赵聊软件",
-        keywords=[
-            # 产品/技术维度
-            "软件", "开发", "定制开发", "小程序", "系统", "AI", "自动化",
-            "工具", "效率", "代码", "部署",
-            # 经营维度（获客是这个号的核心诉求之一）
-            "获客", "客户", "订单", "营收", "成本", "外包", "接单",
-        ],
-        domains=["software", "business"],
-        platforms=["douyin"],
-        form="image_text",
-    ),
-    "小赵无人零售": AccountProfile(
-        name="小赵无人零售",
-        keywords=[
-            # 产品/设备维度
-            "无人零售", "无人咖啡机", "咖啡机", "冰淇淋机", "自动售货",
-            "饮料机", "自助设备", "点位", "设备",
-            # 经营维度（**关键**：只写硬件会漏掉大量可做话题）
-            "开店", "门店", "租金", "客流", "运营", "成本", "加盟",
-            "零售", "消费", "品牌", "商家", "生意", "经营", "连锁",
-        ],
-        domains=["retail", "business"],
-        platforms=["xiaohongshu"],
-        form="image_text",
-    ),
-}
+#: ⚠️ 实测踩过的坑：账号定位最初只写了**产品**维度的关键词，漏了**经营**维度。
+#: 后果：零售类账号只有硬件词 → 门店经营类话题全判 0 分，
+#: 而「某品牌买一送一崩溃」这类话题恰恰是零售运营号最能做的题材
+#: （讲活动预案、客流冲击、运营事故）。
+#: 所以**商业类账号的定位必须同时包含产品词与经营词**。
+_ACCOUNTS_CACHE: dict[str, AccountProfile] | None = None
+
+
+def _load_profiles() -> dict[str, AccountProfile]:
+    """加载账号定义（带缓存）。"""
+    global _ACCOUNTS_CACHE
+    if _ACCOUNTS_CACHE is not None:
+        return _ACCOUNTS_CACHE
+
+    from ..accounts import load_accounts
+
+    profiles: dict[str, AccountProfile] = {}
+    for name, spec in load_accounts().items():
+        profiles[name] = AccountProfile(
+            name=spec.get("display_name") or name,
+            keywords=list(spec.get("keywords") or []),
+            domains=list(spec.get("domains") or []),
+            platforms=list(spec.get("platforms") or []),
+            form=spec.get("form") or "image_text",
+        )
+    _ACCOUNTS_CACHE = profiles
+    return profiles
+
+
+class _ProfilesProxy(dict):
+    """让 `PRESET_PROFILES` 保持字典语义，但内容延迟加载。
+
+    保留它是为了兼容既有调用（`sorted(PRESET_PROFILES)` 等），
+    同时让账号配置可以在运行时从文件加载。
+    """
+
+    def _ensure(self) -> None:
+        if not dict.__len__(self):
+            dict.update(self, _load_profiles())
+
+    def __len__(self) -> int:
+        self._ensure()
+        return dict.__len__(self)
+
+    def __iter__(self):
+        self._ensure()
+        return dict.__iter__(self)
+
+    def __contains__(self, key: object) -> bool:
+        self._ensure()
+        return dict.__contains__(self, key)
+
+    def keys(self):
+        self._ensure()
+        return dict.keys(self)
+
+    def values(self):
+        self._ensure()
+        return dict.values(self)
+
+    def items(self):
+        self._ensure()
+        return dict.items(self)
+
+    def get(self, key, default=None):
+        self._ensure()
+        return dict.get(self, key, default)
+
+    def __getitem__(self, key):
+        self._ensure()
+        return dict.__getitem__(self, key)
+
+
+PRESET_PROFILES: dict[str, AccountProfile] = _ProfilesProxy()
+
+
+def reload_profiles() -> None:
+    """清缓存并重新加载（改了 accounts.local.json 后调用）。"""
+    global _ACCOUNTS_CACHE
+    _ACCOUNTS_CACHE = None
+    PRESET_PROFILES.clear()
 
 
 def get_preset(name: str) -> AccountProfile:
-    p = PRESET_PROFILES.get(name)
+    profiles = _load_profiles()
+    p = profiles.get(name)
     if p is None:
-        raise KeyError(f"未知预设账号：{name}。可用：{', '.join(PRESET_PROFILES)}")
+        available = ", ".join(sorted(profiles)) or "(无)"
+        raise KeyError(f"未知预设账号：{name}。可用：{available}")
     return p

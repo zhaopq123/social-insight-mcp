@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""诊断：小赵无人零售为什么没有强相关候选。
+"""诊断：retail-operator为什么没有强相关候选。
 
 ━━━ 三个待验证的假设 ━━━
 
@@ -20,7 +20,6 @@ from collections import Counter
 
 sys.path.insert(0, "src")
 from social_insight.hot.match import (
-    DOMAIN_LEXICON,
     AccountProfile,
     _domain_score,
     _normalize,
@@ -40,7 +39,7 @@ async def main() -> None:
     print("\n" + "=" * 76)
     print("【现状】当前 profile 的匹配结果")
     print("=" * 76)
-    p_now = get_preset("小赵无人零售")
+    p_now = get_preset("retail-operator")
     ms_now = match_topics(topics, p_now, top_n=9999)
     lv_now = Counter(m.level for m in ms_now)
     print(f"关键词: {p_now.keywords}")
@@ -59,7 +58,7 @@ async def main() -> None:
         "顾客", "价格", "促销", "卖", "营收",
     ]
     p_ext = AccountProfile(
-        name="小赵无人零售(扩展)",
+        name="retail-operator(扩展)",
         keywords=list(p_now.keywords) + EXTRA_KW,
         domains=["retail", "business"],   # ← 加入泛商业领域
         form="image_text",
@@ -102,7 +101,6 @@ async def main() -> None:
     print(f"含商业特征词的热点: {len(hit)} / {len(topics)} 条")
     for t in hit[:20]:
         retail_score = _domain_score(_normalize(t.word), "retail")
-        biz_score = _domain_score(_normalize(t.word), "software")
         print(f"  retail={retail_score:.2f}  {t.word[:54]}")
 
     # ══════════════ H3 验证：源覆盖 ══════════════

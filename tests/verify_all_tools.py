@@ -14,10 +14,13 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import urllib.request
 
-BASE = "http://192.168.3.35:8100/mcp"
+BASE = os.environ.get(
+    "SOCIAL_INSIGHT_MCP_URL", "http://127.0.0.1:8100/mcp"
+)
 ACCEPT = "application/json, text/event-stream"
 
 
@@ -170,7 +173,7 @@ def main() -> int:
         "topics" in r["data"] and "summary" in r["data"]
     ))
 
-    c.expect_ok("topic_match", {"profile": "小赵聊软件", "top_n": 3,
+    c.expect_ok("topic_match", {"profile": "tech-blogger", "top_n": 3,
                                "limit_per_source": 30}, lambda r: (
         "matches" in r["data"] and "profile" in r["data"]
     ))

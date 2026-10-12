@@ -19,7 +19,6 @@ Python 里 `[] or DEFAULT` 会得到 `DEFAULT` —— 空列表是 falsy。
 
 from __future__ import annotations
 
-import inspect
 
 import pytest
 

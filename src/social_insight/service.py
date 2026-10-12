@@ -408,7 +408,7 @@ class SocialInsightService:
         `hot_topics` 回答「现在什么火」，本工具回答「**哪个跟我的号有关**」。
 
         两种用法：
-          1. 用预设账号：``profile="小赵聊软件"``
+          1. 用预设账号：``profile="tech-blogger"``
           2. 临时指定：``keywords=[...], domains=[...]``
 
         ━━━ 设计取舍：三信号融合而非单一分数 ━━━

@@ -71,14 +71,18 @@ def _cutoff(hours: int = 0, days: int = 0) -> str:
 
 
 def _normalize(word: str) -> str:
-    """与 corroborate.normalize 保持一致的简化版（避免循环导入）。"""
-    import re
+    """归一化标题，用于去重与查询。
 
-    s = re.sub(
-        r"[\s#＃【】\[\]（）()《》<>「」“”\"'、,，。.！!？?~～\-—_·|｜:：;；]+", "", word or ""
-    )
-    s = re.sub(r"^(?:刚刚|最新|突发)[:：]?|(?:视频|详情|回应|后续)$", "", s)
-    return s.lower()
+    ⚠️ **转发到 corroborate.normalize**，不自己实现一遍。
+    实测踩过：store 的归一化与 corroborate 不一致（一个剥离「突发」、
+    另一个不剥），导致「同一话题」在存储层与匹配层被当作**不同话题**——
+    表现为趋势数据被拆散、匹配漏判。
+
+    延迟导入是为了避免模块级循环依赖（corroborate 不依赖 store）。
+    """
+    from .hot.corroborate import normalize
+
+    return normalize(word)
 
 
 class SnapshotStore:

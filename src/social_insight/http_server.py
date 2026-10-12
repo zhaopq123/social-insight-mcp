@@ -7,7 +7,7 @@
 
 ━━━ 为什么用 fastmcp 而不是裸 mcp SDK ━━━
 
-目标服务器（vivo 192.168.3.35 的 Ubuntu 容器）上已经跑着 mcp-imagegen，
+目标服务器（vivo <your-server> 的 Ubuntu 容器）上已经跑着 mcp-imagegen，
 用的是 ``fastmcp 4.1.0`` + ``uvicorn``，**版本组合已在真机验证过**。
 复用同一套依赖，避免「在我机器上能跑」的问题。
 
@@ -148,7 +148,7 @@ def build_app(service: SocialInsightService | None = None) -> Any:
         hot_topics 回答「现在什么火」，本工具回答「**哪个跟我的号有关**」。
 
         两种用法：
-          · 用预设账号：profile="小赵聊软件" 或 "小赵无人零售"
+          · 用预设账号：profile="tech-blogger" 或 "retail-operator"
           · 临时指定：keywords=[...], domains=[...]
 
         匹配度由三个正交信号加权，且**分开报告命中证据**：

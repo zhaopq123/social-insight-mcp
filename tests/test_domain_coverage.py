@@ -4,8 +4,8 @@
 
 两个预设账号最初只配了**产品维度**关键词，漏了**经营维度**：
 
-  · 小赵无人零售：只有「咖啡机/冰淇淋机/点位」等硬件词
-  · 小赵聊软件：只有「软件/开发/AI」等技术词
+  · retail-operator：只有「咖啡机/冰淇淋机/点位」等硬件词
+  · tech-blogger：只有「软件/开发/AI」等技术词
 
 后果（2026-10-12 实测）：零售号在 347 条热点里
 **strong=0, maybe=0, weak=318** —— 看起来像「今天没有相关热点」，
@@ -26,8 +26,6 @@ import pytest
 from social_insight.hot.match import (
     DOMAIN_LABELS,
     DOMAIN_LEXICON,
-    AccountProfile,
-    PRESET_PROFILES,
     _domain_score,
     _normalize,
     get_preset,
@@ -95,29 +93,29 @@ class TestPresetProfilesCoverBothDimensions:
     """预设账号必须同时覆盖产品维度与经营维度。"""
 
     def test_retail_has_operational_keywords(self):
-        p = get_preset("小赵无人零售")
+        p = get_preset("retail-operator")
         ops = ["门店", "客流", "成本", "消费", "商家", "运营"]
         missing = [k for k in ops if k not in p.keywords]
         assert not missing, f"零售号缺经营维度关键词: {missing}"
 
     def test_retail_has_product_keywords(self):
-        p = get_preset("小赵无人零售")
+        p = get_preset("retail-operator")
         for k in ["咖啡机", "冰淇淋机", "点位"]:
             assert k in p.keywords, f"零售号缺产品词: {k}"
 
     def test_retail_includes_business_domain(self):
-        p = get_preset("小赵无人零售")
+        p = get_preset("retail-operator")
         assert "retail" in p.domains
         assert "business" in p.domains, "零售号必须也覆盖 business 领域"
 
     def test_software_has_business_domain(self):
         """软件号的核心诉求之一是「获客」，本质是商业问题。"""
-        p = get_preset("小赵聊软件")
+        p = get_preset("tech-blogger")
         assert "software" in p.domains
         assert "business" in p.domains
 
     def test_software_has_customer_keywords(self):
-        p = get_preset("小赵聊软件")
+        p = get_preset("tech-blogger")
         for k in ["获客", "客户", "订单"]:
             assert k in p.keywords, f"软件号缺经营词: {k}"
 
@@ -127,7 +125,7 @@ class TestPreviouslyMissedTopicsNowMatch:
 
     @pytest.mark.parametrize("text,why", PREVIOUSLY_MISSED)
     def test_retail_now_matches(self, text, why):
-        p = get_preset("小赵无人零售")
+        p = get_preset("retail-operator")
         m = match_topics([make_topic(text)], p)[0]
         assert m.score > 0.15, (
             f"零售号仍匹配不上「{text[:36]}」（{why}）: score={m.score}"
@@ -135,7 +133,7 @@ class TestPreviouslyMissedTopicsNowMatch:
 
     def test_key_article_scores_high(self):
         """那条最能做的题材必须有较高分。"""
-        p = get_preset("小赵无人零售")
+        p = get_preset("retail-operator")
         m = match_topics(
             [make_topic("霸王茶姬开启买一送一大促，小程序一度崩溃，店员无奈劝退消费者，商家的活动组织和预案出现了哪些问题？")],
             p,
@@ -145,7 +143,7 @@ class TestPreviouslyMissedTopicsNowMatch:
 
     def test_reasons_explain_hits(self):
         """理由必须指出命中了什么，方便人工复核。"""
-        p = get_preset("小赵无人零售")
+        p = get_preset("retail-operator")
         m = match_topics([make_topic("某品牌门店客流爆满，商家紧急促销")], p)[0]
         assert m.hit_keywords, "应记录命中的业务词"
         assert any("命中" in r for r in m.reasons)
@@ -164,6 +162,6 @@ class TestNoRegressionOnIrrelevant:
         ],
     )
     def test_irrelevant_still_low(self, text):
-        p = get_preset("小赵无人零售")
+        p = get_preset("retail-operator")
         m = match_topics([make_topic(text)], p)[0]
         assert m.score < 0.3, f"无关话题得分过高: {text[:30]} → {m.score}"

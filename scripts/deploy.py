@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import base64
+import os
 import subprocess
 import sys
 import tarfile
@@ -33,9 +34,28 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 REMOTE_TARGET = "/opt/social-insight-mcp"
 
 #: SSH 连接参数（来自 ~/.ssh/config 的 vivo-152-ubuntu）
-SSH_HOST = "192.168.3.35"
-SSH_PORT = "2222"
-SSH_USER = "zpq"
+def _load_dotenv() -> None:
+    """从项目根的 .env 读取环境变量（不覆盖已存在的）。
+
+    本地部署配置放在 .env（已被 .gitignore 忽略），
+    仓库里因此不含任何服务器地址。
+    """
+    env_path = Path(__file__).resolve().parent.parent / ".env"
+    if not env_path.is_file():
+        return
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, _, v = line.partition("=")
+        os.environ.setdefault(k.strip(), v.strip())
+
+
+_load_dotenv()
+
+SSH_HOST = os.environ.get("SOCIAL_INSIGHT_SSH_HOST", "127.0.0.1")
+SSH_PORT = os.environ.get("SOCIAL_INSIGHT_SSH_PORT", "22")
+SSH_USER = os.environ.get("SOCIAL_INSIGHT_SSH_USER", "")
 
 
 def _run(cmd: list[str], **kw) -> subprocess.CompletedProcess:

@@ -51,7 +51,7 @@ python scripts/run_remote.py scripts/ops/test-recovery.sh --termux   # 验证
 ```bash
 python scripts/run_remote.py scripts/ops/health.sh             # 先看整体
 python scripts/run_remote.py scripts/ops/diag-sources.sh       # 源的问题
-ssh -p 8022 zpq@192.168.3.35 "tmux capture-pane -t social-insight -p | tail -30"  # 看日志
+ssh -p 8022 <user>@<your-server> "tmux capture-pane -t social-insight -p | tail -30"  # 看日志
 ```
 
 ## 设计约束（改脚本前必读）

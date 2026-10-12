@@ -5,7 +5,7 @@
 不是「能跑通」，而是：**两个真实账号在同一批热点上，
 能不能选出不同的、各自合理的选题**。
 
-如果「小赵聊软件」和「小赵无人零售」选出一样的结果，
+如果「tech-blogger」和「retail-operator」选出一样的结果，
 说明匹配根本没起作用——那这个工具就是摆设。
 
 所以核心测试就是这条：**同类热点必须对两个账号给出不同排序**。
@@ -91,17 +91,17 @@ class TestDomainScore:
 
 class TestPresets:
     def test_both_exist(self):
-        assert "小赵聊软件" in PRESET_PROFILES
-        assert "小赵无人零售" in PRESET_PROFILES
+        assert "tech-blogger" in PRESET_PROFILES
+        assert "retail-operator" in PRESET_PROFILES
 
     def test_software_profile(self):
-        p = get_preset("小赵聊软件")
+        p = get_preset("tech-blogger")
         assert "software" in p.domains
         assert "软件" in p.keywords
         assert p.form == "image_text"
 
     def test_retail_profile(self):
-        p = get_preset("小赵无人零售")
+        p = get_preset("retail-operator")
         assert "retail" in p.domains
         assert any("咖啡" in k for k in p.keywords)
 
@@ -119,19 +119,19 @@ class TestPresets:
         共享经营词是**正常的**。真正需要保证的是**产品维度不同**——
         那才是决定「同一批热点选出不同选题」的东西。
         """
-        s = get_preset("小赵聊软件")
-        r = get_preset("小赵无人零售")
+        s = get_preset("tech-blogger")
+        r = get_preset("retail-operator")
 
         # 产品维度必须互斥（软件 vs 硬件设备）
-        s_product = {"软件", "开发", "小程序", "代码", "系统"}
+        s_product = {"软件", "开发", "编程", "代码"}
         r_product = {"咖啡机", "冰淇淋机", "无人零售", "自动售货", "点位"}
-        assert s_product <= set(s.keywords), "软件号缺产品词"
+        assert s_product <= set(s.keywords), "科技号缺产品词"
         assert r_product <= set(r.keywords), "零售号缺产品词"
         assert not (s_product & r_product), "两个号的产品词不该重叠"
 
     def test_profiles_share_business_dimension(self):
         """两个号都应覆盖经营维度——它们是同一类商业账号。"""
-        for name in ("小赵聊软件", "小赵无人零售"):
+        for name in ("tech-blogger", "retail-operator"):
             p = get_preset(name)
             assert "business" in p.domains, f"{name} 缺 business 领域"
 
@@ -151,8 +151,8 @@ class TestPresets:
         ]
         from social_insight.hot.match import match_topics
 
-        s_top = match_topics(topics, get_preset("小赵聊软件"), top_n=1)[0]
-        r_top = match_topics(topics, get_preset("小赵无人零售"), top_n=1)[0]
+        s_top = match_topics(topics, get_preset("tech-blogger"), top_n=1)[0]
+        r_top = match_topics(topics, get_preset("retail-operator"), top_n=1)[0]
         assert s_top.word != r_top.word, (
             f"两个号选出同一个首选「{s_top.word}」——定位区分失效"
         )
@@ -180,7 +180,7 @@ class TestMatchDifferentiates:
     """如果两个账号选出一样的结果，说明匹配没起作用。"""
 
     def test_software_account_prefers_software_topics(self):
-        p = get_preset("小赵聊软件")
+        p = get_preset("tech-blogger")
         matches = match_topics([make_topic(t) for t in MIXED_TOPICS], p, top_n=3)
         words = [m.word for m in matches]
         assert any("AI" in w or "软件" in w or "数字化" in w for w in words), (
@@ -188,7 +188,7 @@ class TestMatchDifferentiates:
         )
 
     def test_retail_account_prefers_retail_topics(self):
-        p = get_preset("小赵无人零售")
+        p = get_preset("retail-operator")
         matches = match_topics([make_topic(t) for t in MIXED_TOPICS], p, top_n=3)
         words = [m.word for m in matches]
         assert any("咖啡机" in w or "冰淇淋" in w or "便利店" in w for w in words), (
@@ -198,8 +198,8 @@ class TestMatchDifferentiates:
     def test_two_accounts_give_different_top1(self):
         """决定性测试：两个账号的**首选**必须不同。"""
         topics = [make_topic(t) for t in MIXED_TOPICS]
-        s_top = match_topics(topics, get_preset("小赵聊软件"), top_n=1)[0]
-        r_top = match_topics(topics, get_preset("小赵无人零售"), top_n=1)[0]
+        s_top = match_topics(topics, get_preset("tech-blogger"), top_n=1)[0]
+        r_top = match_topics(topics, get_preset("retail-operator"), top_n=1)[0]
         assert s_top.word != r_top.word, (
             f"两个账号选出了同一个首选「{s_top.word}」——匹配未生效"
         )
@@ -207,7 +207,7 @@ class TestMatchDifferentiates:
     def test_irrelevant_topics_ranked_low(self):
         """明星八卦对两个号都应该排很低。"""
         topics = [make_topic(t) for t in MIXED_TOPICS]
-        for preset_name in ["小赵聊软件", "小赵无人零售"]:
+        for preset_name in ["tech-blogger", "retail-operator"]:
             matches = match_topics(topics, get_preset(preset_name), top_n=10)
             celeb = next((m for m in matches if "官宣" in m.word), None)
             assert celeb is not None
@@ -224,7 +224,7 @@ class TestMatchScoring:
 
     def test_reasons_explain_why(self):
         """理由必须存在——这工具的價值就在于可解释。"""
-        p = get_preset("小赵无人零售")
+        p = get_preset("retail-operator")
         m = match_topics([make_topic("无人咖啡机进驻写字楼")], p)[0]
         assert m.reasons
         assert any("咖啡机" in r for r in m.reasons), f"理由没提到命中的词: {m.reasons}"
@@ -236,23 +236,23 @@ class TestMatchScoring:
         assert "点位" in m.hit_keywords
 
     def test_score_range(self):
-        p = get_preset("小赵聊软件")
+        p = get_preset("tech-blogger")
         for m in match_topics([make_topic(t) for t in MIXED_TOPICS], p, top_n=10):
             assert 0.0 <= m.score <= 1.0
 
     def test_sorted_descending(self):
-        p = get_preset("小赵聊软件")
+        p = get_preset("tech-blogger")
         matches = match_topics([make_topic(t) for t in MIXED_TOPICS], p, top_n=10)
         scores = [m.score for m in matches]
         assert scores == sorted(scores, reverse=True)
 
     def test_top_n_respected(self):
-        p = get_preset("小赵聊软件")
+        p = get_preset("tech-blogger")
         assert len(match_topics([make_topic(t) for t in MIXED_TOPICS], p, top_n=3)) == 3
 
     def test_noise_penalty(self):
         """命中无关领域应被扣分（软件号遇到体育热点）。"""
-        p = get_preset("小赵聊软件")
+        p = get_preset("tech-blogger")
         sports = match_topics([make_topic("足球比赛夺冠")], p)[0]
         # 体育领域命中 → noise 高 → 分数应低于中性话题
         assert sports.score < 0.35, f"体育热点对软件号不该得高分: {sports.score}"
@@ -290,7 +290,7 @@ class TestCrossSourceDedup:
     """同一话题在多个源出现时必须去重。"""
 
     def test_duplicates_removed(self):
-        p = get_preset("小赵无人零售")
+        p = get_preset("retail-operator")
         topics = [
             make_topic("霸王茶姬店员劝退消费者", platform="weibo"),
             make_topic("霸王茶姬店员劝退消费者", platform="baidu"),
@@ -301,7 +301,7 @@ class TestCrossSourceDedup:
 
     def test_dedup_is_normalized(self):
         """标点/空白不同的同一话题也应去重。"""
-        p = get_preset("小赵无人零售")
+        p = get_preset("retail-operator")
         topics = [
             make_topic("无人咖啡机 进驻"),
             make_topic("无人咖啡机进驻"),
@@ -310,7 +310,7 @@ class TestCrossSourceDedup:
 
     def test_different_topics_kept(self):
         """不同话题不能被误删。"""
-        p = get_preset("小赵无人零售")
+        p = get_preset("retail-operator")
         topics = [make_topic("咖啡机新品"), make_topic("冰淇淋机新品")]
         assert len(match_topics(topics, p, top_n=10)) == 2
 
@@ -319,7 +319,7 @@ class TestCorroborationPassthrough:
     """「火」与「相关」必须分开呈现。"""
 
     def test_corroboration_attached(self):
-        p = get_preset("小赵聊软件")
+        p = get_preset("tech-blogger")
         corr = {"某AI大模型开源发布": {"level": "confirmed", "source_count": 4}}
         m = match_topics([make_topic("某AI大模型开源发布")], p, corroboration_of=corr)[0]
         assert m.corroboration == "confirmed"
@@ -327,7 +327,7 @@ class TestCorroborationPassthrough:
 
     def test_hot_but_irrelevant_still_low_score(self):
         """**关键**：很火但不相关，不该因为火就排前面。"""
-        p = get_preset("小赵聊软件")
+        p = get_preset("tech-blogger")
         corr = {"郑钦文退出武汉网球公开赛": {"level": "confirmed", "source_count": 5}}
         m = match_topics([make_topic("郑钦文退出武汉网球公开赛")], p, corroboration_of=corr)[0]
         assert m.corroboration == "confirmed", "应如实反映热度"
@@ -341,10 +341,10 @@ class TestCorroborationPassthrough:
 
 class TestEdgeCases:
     def test_empty_topics(self):
-        assert match_topics([], get_preset("小赵聊软件")) == []
+        assert match_topics([], get_preset("tech-blogger")) == []
 
     def test_empty_word_skipped(self):
-        assert match_topics([make_topic("")], get_preset("小赵聊软件")) == []
+        assert match_topics([make_topic("")], get_preset("tech-blogger")) == []
 
     def test_empty_profile(self):
         """空定位不该崩溃，只是匹配度都很低。"""
@@ -356,11 +356,18 @@ class TestEdgeCases:
     def test_serialization(self):
         import json
 
-        p = get_preset("小赵聊软件")
+        p = get_preset("tech-blogger")
         m = match_topics([make_topic("软件开发避坑指南")], p)[0]
         json.dumps(m.to_dict(), ensure_ascii=False)
 
     def test_profile_to_dict(self):
-        d = get_preset("小赵聊软件").to_dict()
-        assert d["name"] == "小赵聊软件"
+        """`name` 是**显示名**，字典键才是账号 ID。
+
+        ⚠️ 语义说明（配置化之后）：账号键（如 `tech-blogger`）是稳定的
+        程序标识；`name` 是给人看的显示名。两者刻意分开——
+        这样账号改名不必改代码，也不会让本地配置里的中文名泄漏到开源仓库。
+        """
+        d = get_preset("tech-blogger").to_dict()
+        assert d["name"] == "科技/软件博主"  # 显示名
         assert "software" in d["domains"]
+        assert "business" in d["domains"]

@@ -10,10 +10,13 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import urllib.request
 
-BASE = "http://192.168.3.35:8100/mcp"
+BASE = os.environ.get(
+    "SOCIAL_INSIGHT_MCP_URL", "http://127.0.0.1:8100/mcp"
+)
 ACCEPT = "application/json, text/event-stream"
 
 
@@ -101,11 +104,11 @@ def main() -> int:
                    "clientInfo": {"name": "live-demo", "version": "1"}},
     })
     print("=" * 78)
-    print("topic_match 实测演示 · 直连服务器 192.168.3.35:8100")
+    print("topic_match 实测演示 · 直连服务器 <your-server>:8100")
     print("=" * 78)
 
-    software = show_account(c, "小赵聊软件")
-    retail = show_account(c, "小赵无人零售")
+    software = show_account(c, "tech-blogger")
+    retail = show_account(c, "retail-operator")
 
     # ---- 对比分析 ----
     bar("两个账号的对比")

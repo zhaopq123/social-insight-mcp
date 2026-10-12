@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import pytest
 
-from social_insight.hot.corroborate import CorroboratedTopic
 from social_insight.hot.match import AccountProfile, match_topics
 from social_insight.models import HotTopic
 
@@ -99,7 +98,7 @@ class TestServicePassesSourcesThrough:
         monkeypatch.setattr("social_insight.service.fetch_many", fake_fetch)
 
         svc = SocialInsightService()
-        res = await svc.topic_match(profile="小赵聊软件", top_n=5)
+        res = await svc.topic_match(profile="tech-blogger", top_n=5)
         await svc.aclose()
 
         assert res["ok"] is True
@@ -130,7 +129,7 @@ class TestServicePassesSourcesThrough:
         monkeypatch.setattr("social_insight.service.fetch_many", fake_fetch)
 
         svc = SocialInsightService()
-        res = await svc.topic_match(profile="小赵聊软件", top_n=5)
+        res = await svc.topic_match(profile="tech-blogger", top_n=5)
         await svc.aclose()
 
         summary = res["data"]["summary"]

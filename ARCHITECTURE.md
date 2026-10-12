@@ -285,7 +285,7 @@ cache(cache_key, response, expires_at)
 ## 6. 部署形态
 
 ```
-vivo 服务器 192.168.3.35  (Ubuntu)
+vivo 服务器 <your-server>  (Ubuntu)
 ├── /opt/social-insight-mcp/          本 MCP Server
 │   ├── 容器或 venv
 │   └── data/snapshots.db             SQLite 持久化
@@ -294,7 +294,7 @@ vivo 服务器 192.168.3.35  (Ubuntu)
     ├── XHS_COOKIE / XHS_MCP_ENDPOINT
     └── DOUYIN_COOKIE（可选）
 
-DSH (本机)  ──streamable-http──▶  http://192.168.3.35:<port>/mcp
+DSH (本机)  ──streamable-http──▶  http://<your-server>:<port>/mcp
 ```
 
 挂载方式：写入 `<DSH_HOME>/@wingsky-1/dsh-mcp-manager/mcp.json`（**注意 UTF-8 BOM 坑**）。
@@ -335,7 +335,7 @@ DSH (本机)  ──streamable-http──▶  http://192.168.3.35:<port>/mcp
 
 | # | 事项 | 状态 |
 |---|---|---|
-| 1 | **部署接入**：SSH 自动连接未开启（`192.168.3.35:22` 实测不可达） | ⏸ 等你开开关 |
+| 1 | **部署接入**：SSH 自动连接未开启（`<your-server>:22` 实测不可达） | ⏸ 等你开开关 |
 | 2 | **小红书是否要做** | ⏸ 已降级为可选（P5） |
 | 3 | 抖音签名策略 | ✅ 已定：依赖成熟库（f2 / douyin-tiktok-scraper） |
 | 4 | 快照节奏 | ⏸ 待定（默认每日 2 次） |

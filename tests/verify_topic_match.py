@@ -16,10 +16,13 @@ DSH 的 MCP 客户端在会话建立时固化工具表，服务端新增工具�
 from __future__ import annotations
 
 import json
+import os
 import sys
 import urllib.request
 
-BASE = "http://192.168.3.35:8100/mcp"
+BASE = os.environ.get(
+    "SOCIAL_INSIGHT_MCP_URL", "http://127.0.0.1:8100/mcp"
+)
 ACCEPT = "application/json, text/event-stream"
 
 
@@ -106,12 +109,12 @@ def main() -> int:
 
     # 2. 用预设账号调用
     print("\n[2] 预设账号调用")
-    ok1 = show("小赵聊软件", c.call("topic_match",
-                                    {"profile": "小赵聊软件", "top_n": 5,
+    ok1 = show("tech-blogger", c.call("topic_match",
+                                    {"profile": "tech-blogger", "top_n": 5,
                                      "limit_per_source": 40}))
     print()
-    ok2 = show("小赵无人零售", c.call("topic_match",
-                                     {"profile": "小赵无人零售", "top_n": 5,
+    ok2 = show("retail-operator", c.call("topic_match",
+                                     {"profile": "retail-operator", "top_n": 5,
                                       "limit_per_source": 40}))
 
     # 3. 临时定位调用

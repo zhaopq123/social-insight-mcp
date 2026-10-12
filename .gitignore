@@ -1,4 +1,4 @@
-﻿__pycache__/
+__pycache__/
 *.py[cod]
 .venv/
 venv/
@@ -6,3 +6,4 @@ venv/
 data/
 *.db
 .env
+accounts.local.json

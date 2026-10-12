@@ -14,11 +14,14 @@
 from __future__ import annotations
 
 import json
+import os
 import sys
 import urllib.request
 from typing import Any
 
-BASE = "http://192.168.3.35:8100/mcp"
+BASE = os.environ.get(
+    "SOCIAL_INSIGHT_MCP_URL", "http://127.0.0.1:8100/mcp"
+)
 
 #: MCP 要求客户端声明能接受这两种类型
 ACCEPT = "application/json, text/event-stream"
