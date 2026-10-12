@@ -72,6 +72,21 @@ async def run_once(
         )
         if prune_days is not None:
             result["pruned"] = store.prune(keep_days=prune_days)
+
+        # 推进 WAL 检查点。
+        #
+        # ⚠️ 实测（2026-10-12）：WAL 稳定在 4.7 MB 不增长但也不回落——
+        # 因为 autocheckpoint 只在**写满 1000 页**时触发，
+        # 而采集脚本是「批量写 → 长时间空闲」，空闲期不触发。
+        #
+        # 采集脚本天然是「周期性」的，正好适合顺手推进检查点。
+        # 用 TRUNCATE 让 WAL 归零（每次采集完就清干净）。
+        try:
+            store.checkpoint(truncate=True)
+            result["wal_bytes"] = store.wal_size()
+        except Exception as exc:  # noqa: BLE001
+            # 检查点失败不该让采集失败——数据已经落盘了
+            result["wal_checkpoint_error"] = str(exc)[:100]
     finally:
         await client.aclose()
         store.close()

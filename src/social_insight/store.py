@@ -200,6 +200,34 @@ class SnapshotStore:
             ).fetchall()
         return [dict(r) for r in reversed(rows)]
 
+    def checkpoint(self, *, truncate: bool = False) -> tuple[int, int, int]:
+        """手动推进 WAL 检查点。
+
+        ━━━ 为什么需要显式调用 ━━━
+
+        实测观察（2026-10-12）：WAL 稳定在 4.7 MB 且**不增长**，
+        但也不回落 —— 因为 `wal_autocheckpoint=1000` 页（≈4MB）
+        只在**写满时**触发，而我们的写入模式是
+        「批量写 ~300 条 → 长时间空闲」，空闲期不触发检查点。
+
+        后果：WAL 长期占 4~5 MB（磁盘上可忽略，但崩溃恢复要多重放）。
+        WAL 模式本身没问题，只是需要一个**时机**去推进检查点。
+
+        truncate=True 会把 WAL 文件截断为 0（适合定期维护）；
+        False 只做检查点，文件保留但内容已合并进主库。
+        """
+        conn = self._conn
+        mode = "TRUNCATE" if truncate else "PASSIVE"
+        return conn.execute(f"PRAGMA wal_checkpoint({mode})").fetchone()  # type: ignore[return-value]
+
+    def wal_size(self) -> int:
+        """WAL 文件字节数（诊断用；不存在时返回 0）。"""
+        wal = self.db_path.with_name(self.db_path.name + "-wal")
+        try:
+            return wal.stat().st_size
+        except OSError:
+            return 0
+
     def trending_topics(self, *, hours: int = 24, limit: int = 20) -> list[dict[str, Any]]:
         """近期被反复抓到的话题——出现次数越多说明持续在榜。
 
