@@ -25,8 +25,19 @@ fi
 
 echo ""
 echo "=== 2. 停掉容器内的残留进程 ==="
+# ⚠️ **刻意不用 `pkill -f`**（实测踩过，见下）。
+#
+# `pkill -f social_insight.http_server` 会匹配**完整命令行**，
+# 而 runsv/守护链拉起的进程命令行里同样含这个字符串 ——
+# 于是「停残留」会把守护链自己一起杀掉（连带 runsv、
+# 甚至同一台机器上的 sshd守护）。
+#
+# 正确做法：按进程名精确匹配，或者从 pid 文件取。
 proot-distro login ubuntu -- bash -c \
-  "pkill -f social_insight.http_server 2>/dev/null; sleep 1; echo done" 2>&1 | tail -2
+  "pgrep -x python | while read p; do
+     grep -qa social_insight /proc/\$p/cmdline 2>/dev/null && kill \$p 2>/dev/null
+   done
+   sleep 1; echo done" 2>&1 | tail -2
 
 echo ""
 echo "=== 3. 修复权限（tar 解包不带执行位）==="

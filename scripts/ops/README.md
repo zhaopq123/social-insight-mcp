@@ -18,12 +18,30 @@
 
 | 脚本 | 层 | 用途 |
 |---|---|---|
-| `daemon.sh` | Termux | **建服务守护循环**（首次部署、守护失效时） |
+| `install-runsv.sh` | Termux | **注册 runsv 常驻服务（推荐）** |
+| `daemon.sh` | Termux | 建 tmux 守护循环（旧方案，见下方说明） |
 | `restart.sh` | Termux | **重启服务**（部署新代码后必做） |
 | `snapshot-cron.sh` | Termux | 建快照定时采集（每 2 小时） |
 | `test-recovery.sh` | Termux | 强杀恢复测试（验证守护真的有效） |
 | `health.sh` | 容器 | 健康巡检（进程/端口/工具/快照库） |
 | `diag-sources.sh` | 容器 | 热点源连通性诊断（哪个源挂了） |
+
+### 为什么推荐 runsv 而不是 tmux（实测结论）
+
+`daemon.sh` 用的是「tmux 会话 + while 循环」，有三个实测踩到的问题：
+
+1. **tmux 会话会死** —— Termux 被系统回收时会话一起消失，守护就没了。
+   runsvdir 是 Termux 的**标准守护机制**（`sshd` / `git-daemon` 就是它管的），
+   跟系统生命周期绑定。
+2. **日志增长无上限** —— 实测某客户端每分钟用失效 token 轮询，
+   每次 401 打两条日志，4 小时就 48KB；长期运行吃满手机存储。
+   `install-runsv.sh` 生成的 run 脚本自带按大小裁剪（>5MB 裁到 2MB）。
+3. **会悄悄消失** —— 实际部署后经常「昨天还在今天没了」，
+   因为 tmux 会话被清掉而没人察觉。runsv 会拉回来。
+
+⚠️ 另：`daemon.sh` 里原本用 `pkill -f social_insight.http_server` 停残留进程，
+**已改掉** —— `pkill -f` 匹配完整命令行，会把守护链自己一起杀掉
+（连带 runsv、甚至同机的 sshd 守护）。现在改为按 pid + cmdline 精确匹配。
 
 ## 典型流程
 
