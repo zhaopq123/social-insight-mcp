@@ -43,16 +43,21 @@ async def run_once(
     quiet: bool = False,
 ) -> dict:
     """采集一次快照。"""
+    # ⚠️ 必须区分 None（未传）与 []（显式传空）——同 service.hot_topics。
+    # 写成 `sources or DEFAULT_SOURCES` 会让空列表被静默替换成默认源
+    # （实测在 service 里踩过，这里又犯了一次——结构性测试现在覆盖全 src/）。
+    chosen = list(DEFAULT_SOURCES) if sources is None else list(sources)
+
     store = SnapshotStore(db_path)
     client = HttpClient()
     result: dict = {
         "ok": False,
         "at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-        "sources": sources or DEFAULT_SOURCES,
+        "sources": chosen,
     }
     try:
         topics, failures = await fetch_many(
-            client, sources or DEFAULT_SOURCES, limit_per_source=limit
+            client, chosen, limit_per_source=limit
         )
         saved = store.save_hot_topics(topics)
         stats = store.stats()

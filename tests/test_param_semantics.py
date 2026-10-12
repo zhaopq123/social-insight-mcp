@@ -145,28 +145,65 @@ class TestFetchManySemantics:
 
 
 class TestNoFalsyFallbackRegression:
-    """横向检查：源码里不该再有 `x or DEFAULT` 形式的源参数。
+    """横向检查：**整个 src/** 都不该有 `x or DEFAULT` 形式的源参数。
 
-    这是个**结构性**检查——只要有人再写回那种形式，这个测试就会红。
+    ━━━ 为什么扫描范围必须覆盖全 src/ ━━━
+
+    最初这个测试只扫 `service` 与 `hot.sources` 两个模块。
+    结果**后来新写的 `snapshot.py` 里又犯了同一个错**（2 处），
+    测试没拦住——因为范围没覆盖到。
+
+    复犯说明范围设小了。现在改成扫 `src/` 下所有 .py，
+    任何新文件都自动纳入检查（含元测试，防止范围再被改小）。
     """
 
-    def test_service_has_no_falsy_fallback(self):
-        src = inspect.getsource(SocialInsightService)
-        bad = [
-            line.strip()
-            for line in src.splitlines()
-            if "sources or DEFAULT" in line
-            # 注释里提到这个坑是允许的
-            and not line.strip().startswith("#")
-        ]
-        assert not bad, f"发现 falsy 回退写法（会静默替换空列表）: {bad}"
+    @staticmethod
+    def _iter_source_lines():
+        from pathlib import Path
 
-    def test_sources_module_has_no_falsy_fallback(self):
-        src = inspect.getsource(sources_mod)
-        bad = [
-            line.strip()
-            for line in src.splitlines()
-            if ("sources or DEFAULT" in line or "sources or  " in line)
-            and not line.strip().startswith("#")
-        ]
-        assert not bad, f"fetch_many 里有 falsy 回退: {bad}"
+        src_root = Path(__file__).resolve().parent.parent / "src"
+        for py in sorted(src_root.rglob("*.py")):
+            for lineno, line in enumerate(
+                py.read_text(encoding="utf-8").splitlines(), start=1
+            ):
+                yield py, lineno, line
+
+    def test_no_falsy_fallback_anywhere_in_src(self):
+        """全 src/ 扫描：代码行里不得出现 `sources or DEFAULT`。"""
+        bad = []
+        for path, lineno, line in self._iter_source_lines():
+            stripped = line.strip()
+            # 跳过注释与文档字符串（那是刻意记录这个坑的说明）
+            if stripped.startswith("#"):
+                continue
+            if "sources or DEFAULT" in line:
+                bad.append(f"{path.name}:{lineno}  {stripped}")
+
+        assert not bad, (
+            "发现 falsy 回退写法（空列表会被静默替换成默认源）:\n  "
+            + "\n  ".join(bad)
+            + "\n\n正确写法: chosen = list(DEFAULT_SOURCES) if sources is None else list(sources)"
+        )
+
+    def test_scanner_covers_all_modules(self):
+        """元测试：确认扫描范围真的覆盖到关键模块。
+
+        防止「检查器本身有盲区」——最初只扫两个模块，
+        snapshot.py 里的同类 bug 就漏掉了。
+        """
+        names = {p.name for p, _, _ in self._iter_source_lines()}
+        for must in ("snapshot.py", "service.py", "sources.py", "store.py"):
+            assert must in names, f"扫描范围没覆盖 {must}"
+        assert len(names) >= 8, f"扫描到的模块太少: {sorted(names)}"
+
+    def test_no_falsy_fallback_in_other_list_params(self):
+        """同类的 `keywords or []` / `domains or []` 也防回归。"""
+        bad = []
+        for path, lineno, line in self._iter_source_lines():
+            stripped = line.strip()
+            if stripped.startswith("#"):
+                continue
+            for pat in ("keywords or [", "domains or [", "sources or ["):
+                if pat in line:
+                    bad.append(f"{path.name}:{lineno}  {stripped}")
+        assert not bad, "发现可疑的 falsy 回退:\n  " + "\n  ".join(bad)

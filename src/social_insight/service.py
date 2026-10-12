@@ -399,9 +399,13 @@ class SocialInsightService:
                     reason="没有账号定位就无法判断「哪个热点跟你有关」。",
                     alternatives=sorted(PRESET_NAMES),
                 )
+            # 显式区分 None 与 []，不用 `x or []` ——
+            # 虽然这里语义等价（None 和 [] 都表示「没有」），但显式写
+            # 能让「哪些参数的空值有特殊含义」一目了然，
+            # 也让全 src 的 falsy 回退扫描保持零例外（检查器不该有特例）。
             acct = AccountProfile(
-                keywords=list(keywords or []),
-                domains=list(domains or []),
+                keywords=list(keywords) if keywords is not None else [],
+                domains=list(domains) if domains is not None else [],
                 form=form,
             )
 
