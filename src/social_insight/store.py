@@ -102,8 +102,18 @@ class SnapshotStore:
     def _conn(self) -> sqlite3.Connection:
         conn = getattr(self._local, "conn", None)
         if conn is None:
-            conn = sqlite3.connect(str(self.db_path), timeout=10.0)
+            # ⚠️ 实测踩过的坑（2026-10-12 并发测试偶发失败）：
+            # SQLite 默认是 rollback journal 模式，**写操作会锁整个数据库**，
+            # 多线程同时写必然偶发 `database is locked`。
+            #
+            # 两处修正：
+            #   1. WAL 模式 —— 读写不互相阻塞
+            #   2. busy_timeout —— 遇锁时等待而非立刻失败
+            conn = sqlite3.connect(str(self.db_path), timeout=30.0, check_same_thread=False)
             conn.row_factory = sqlite3.Row
+            conn.execute("PRAGMA journal_mode=WAL")
+            conn.execute("PRAGMA busy_timeout=30000")
+            conn.execute("PRAGMA synchronous=NORMAL")
             self._local.conn = conn
         return conn
 

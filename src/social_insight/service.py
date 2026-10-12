@@ -108,6 +108,54 @@ from .http import HttpClient
 from .platforms.registry import get_adapter, platform_matrix
 
 __all__ = ["SocialInsightService"]
+#: 各数值参数的合法范围 (最小值, 最大值, 说明)
+#:
+#: ⚠️ 实测踩过的坑（2026-10-12 多轮压测）：
+#: `limit_per_source=99999` 让 10 个源各抓 99999 条 —— 服务 CPU 打到 49%、
+#: 单次响应从 <1s 恶化到 17.8s，且请求超时。
+#: **参数没有上限 = 资源耗尽漏洞**，必须在抓取之前拦住。
+BOUNDS: dict[str, tuple[int, int, str]] = {
+    "limit_per_source": (1, 200, "每个源抓取的条数"),
+    "top_n": (0, 100, "返回条数"),
+    "min_sources": (1, 10, "最少独立源数"),
+    "limit": (1, 200, "返回条数"),
+    "hours": (1, 24 * 30, "时间窗口（小时）"),
+}
+
+
+def _check_bounds(name: str, value: Any) -> int:
+    """校验数值参数范围。越界抛 INVALID_ARGUMENT（不是让上游超时）。
+
+    返回规范化后的整数。
+    """
+    lo, hi, desc = BOUNDS[name]
+    try:
+        v = int(value)
+    except (TypeError, ValueError):
+        raise ToolError(
+            code=ErrorCode.INVALID_ARGUMENT,
+            message=f"{name} 必须是整数，收到 {value!r}",
+            reason=f"{desc}，范围 {lo}~{hi}。",
+        ) from None
+
+    if v < lo or v > hi:
+        raise ToolError(
+            code=ErrorCode.INVALID_ARGUMENT,
+            message=f"{name} 超出范围：{v}（允许 {lo}~{hi}）",
+            reason=(
+                f"{desc}。"
+                + (
+                    "上限是为了防止资源耗尽——每个源都会按这个值抓取，"
+                    "过大的值会让服务 CPU 与延迟飙升。"
+                    if v > hi
+                    else ""
+                )
+            ),
+            details={"min": lo, "max": hi, "received": v},
+        )
+    return v
+
+
 
 
 class SocialInsightService:
@@ -126,10 +174,6 @@ class SocialInsightService:
         await self.http.aclose()
         if self.store is not None:
             self.store.close()
-
-    # ------------------------------------------------------------------
-    # 元信息
-    # ------------------------------------------------------------------
 
     async def capabilities(self) -> dict[str, Any]:
         """能力矩阵。让调用方一眼看清每个平台能做什么、需要什么。
@@ -240,6 +284,15 @@ class SocialInsightService:
         corroborate_result=True（默认）时，返回的是**交叉验证后**的话题：
         每条带 source_count 与 level（confirmed/likely/single）。
         """
+        # ⚠️ 参数边界必须在抓取**之前**校验。
+        #
+        # 实测踩过的坑（2026-10-12 多轮压测）：传 limit_per_source=99999
+        # 会让 10 个源各抓 99999 条 —— 服务 CPU 打到 49%、
+        # 单次响应从 <1s 恶化到 17.8s，请求直接超时。
+        # **参数没有上限 = 资源耗尽漏洞。**
+        limit_per_source = _check_bounds("limit_per_source", limit_per_source)
+        min_sources = _check_bounds("min_sources", min_sources)
+
         # ⚠️ 必须区分 `None`（未传）与 `[]`（显式传空）。
         #
         # 实测踩过的坑：写成 `sources or DEFAULT_SOURCES` 时，空列表是 falsy，
@@ -357,6 +410,9 @@ class SocialInsightService:
         ⚠️ 依赖快照层。若从未采集过，会返回空并明确说明——
         因为「没有历史」和「没有趋势」是两件不同的事，不能混淆。
         """
+        hours = _check_bounds("hours", hours)
+        limit = _check_bounds("limit", limit)
+
         if self.store is None:
             raise ToolError(
                 code=ErrorCode.CAPABILITY_UNSUPPORTED,
@@ -429,6 +485,9 @@ class SocialInsightService:
         **两件事不能混**——一个很火但不相关的话题，不该因为火就排前面。
         """
         from .hot.match import AccountProfile, get_preset, match_topics
+
+        limit_per_source = _check_bounds("limit_per_source", limit_per_source)
+        top_n = _check_bounds("top_n", top_n)
 
         # --- 构造账号定位 ---
         if profile:

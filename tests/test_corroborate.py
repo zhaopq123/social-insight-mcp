@@ -206,6 +206,76 @@ class TestIsSameTopic:
 # ══════════════════════════════════════════════════════════════════
 
 
+class TestSubjectAnchorTrap:
+    """共享主语 ≠ 同一事件。
+
+    ━━━ 为什么单开一个测试类 ━━━
+
+    实测踩过的坑（2026-10-12）：
+
+        「霸王茶姬店员劝退消费者」
+        「霸王茶姬店员活动日有三倍工资吗」
+
+    共享锚点「霸王茶姬店员」(LCS=6)，jac=0.26 —— 被误判为同一话题。
+    但前者讲服务事故、后者讲薪资，是两件事。
+
+    **规律**：实体锚点只能证明「在说同一个对象」，
+    不能证明「在说同一件事」。锚点必须搭配足够的措辞重合才成立。
+    """
+
+    @pytest.mark.parametrize(
+        "a,b,why",
+        [
+            ("霸王茶姬店员劝退消费者", "霸王茶姬店员活动日有三倍工资吗",
+             "共享主语，谓语不同"),
+            ("郑钦文登长城拍中网冠军写真", "郑钦文首夺中网女单冠军",
+             "同人不同事件"),
+            ("霸王茶姬店员劝退消费者", "霸王茶姬就崩了致歉",
+             "同品牌不同事件"),
+        ],
+    )
+    def test_shared_subject_not_merged(self, a, b, why):
+        assert _is_same_topic(normalize(a), normalize(b)) is False, why
+
+    @pytest.mark.parametrize(
+        "a,b,why",
+        [
+            ("霸王茶姬买一送一赢了订单输了体验", "霸王茶姬买一送一到底是谁在喝啊",
+             "同事件不同措辞"),
+            ("武网官方回应郑钦文退赛", "郑钦文退出武网", "实测应合并"),
+        ],
+    )
+    def test_same_event_still_merged(self, a, b, why):
+        """收紧阈值不能破坏真正的同事件合并。"""
+        assert _is_same_topic(normalize(a), normalize(b)) is True, why
+
+    def test_threshold_gap_exists(self):
+        """验证两类案例之间确实存在可分间隙。
+
+        误合并案例 jac≈0.26，正确合并案例 jac≈0.32 ——
+        阈值必须落在这个区间内。这个测试锁住间隙存在：
+        将来若有人改了相似度算法导致间隙消失，会立刻暴露。
+        """
+        false_case = _similarity(
+            normalize("霸王茶姬店员劝退消费者"),
+            normalize("霸王茶姬店员活动日有三倍工资吗"),
+        )
+        true_case = _similarity(
+            normalize("武网官方回应郑钦文退赛"), normalize("郑钦文退出武网")
+        )
+        assert false_case < true_case, (
+            f"误合并与正确合并的相似度区间重叠："
+            f"{false_case:.2f} vs {true_case:.2f} —— 阈值将无法区分"
+        )
+
+        from social_insight.hot.corroborate import ENTITY_SIM_FLOOR
+
+        assert false_case < ENTITY_SIM_FLOOR <= true_case, (
+            f"ENTITY_SIM_FLOOR={ENTITY_SIM_FLOOR} 没落在 "
+            f"({false_case:.2f}, {true_case:.2f}] 区间内"
+        )
+
+
 class TestIndependence:
     def test_mirror_sources_count_once(self, topic_factory):
         """镜像源（同 independence 键）只算一票。

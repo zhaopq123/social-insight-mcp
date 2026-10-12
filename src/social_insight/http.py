@@ -64,6 +64,17 @@ class HttpClient:
     _last_call: dict[str, float] = field(default_factory=dict, init=False, repr=False)
     _locks: dict[str, asyncio.Lock] = field(default_factory=dict, init=False, repr=False)
 
+    #: 缓存条目上限。
+    #
+    # ⚠️ 审计发现的隐患（2026-10-12）：缓存原本是**无界** dict，
+    # 过期项只在被访问时才删（懒删除）。服务是长期运行的 ——
+    # 实测塞 5000 条不同 key 后**全部留存**，意味着连续运行数天
+    # 会持续吃内存直到 OOM。
+    #
+    # 1200 条对热点场景足够（10 个源 × 几个常见 limit 组合），
+    # 超出后优先淘汰「最快过期」的条目。
+    max_cache_entries: int = 1200
+
     async def _ensure(self) -> httpx.AsyncClient:
         if self._client is None:
             self._client = httpx.AsyncClient(
@@ -78,6 +89,10 @@ class HttpClient:
         if self._client is not None:
             await self._client.aclose()
             self._client = None
+
+    def cache_size(self) -> int:
+        """当前缓存条目数（诊断用）。"""
+        return len(self._cache)
 
     # --- 节流 ---
 
@@ -109,6 +124,35 @@ class HttpClient:
 
     def _cache_put(self, key: str, payload: Any, ttl: float) -> None:
         self._cache[key] = CacheEntry(payload=payload, expires_at=time.monotonic() + ttl)
+        self._evict_if_needed()
+
+    def _evict_if_needed(self) -> None:
+        """缓存超过上限时淘汰。
+
+        策略：先清掉**所有已过期**的（便宜且明确无用），
+        若仍超限，再按「最快过期」淘汰到上限的 80%。
+
+        为什么不按 LRU：热点场景里「即将过期」等价于「最没价值」，
+        按过期时间淘汰比维护访问顺序更简单，也够用。
+        """
+        limit = self.max_cache_entries
+        if len(self._cache) <= limit:
+            return
+
+        now = time.monotonic()
+        expired = [k for k, v in self._cache.items() if v.expires_at < now]
+        for k in expired:
+            self._cache.pop(k, None)
+
+        if len(self._cache) <= limit:
+            return
+
+        # 仍超限 → 按过期时间升序淘汰到 80%
+        target = max(1, int(limit * 0.8))
+        drop_count = len(self._cache) - target
+        oldest = sorted(self._cache.items(), key=lambda kv: kv[1].expires_at)[:drop_count]
+        for k, _ in oldest:
+            self._cache.pop(k, None)
 
     # --- 请求 ---
 

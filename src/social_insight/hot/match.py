@@ -408,7 +408,13 @@ _ACCOUNTS_CACHE: dict[str, AccountProfile] | None = None
 
 
 def _load_profiles() -> dict[str, AccountProfile]:
-    """加载账号定义（带缓存）。"""
+    """加载账号定义（带缓存）。
+
+    ⚠️ 这是**唯一的**账号数据来源。
+    `PRESET_PROFILES` 代理与 `get_preset` 都走这里 ——
+    避免两套缓存不一致（审计发现：代理与 get_preset 曾各持一份，
+    导致 reload 后一个更新了另一个没更新）。
+    """
     global _ACCOUNTS_CACHE
     if _ACCOUNTS_CACHE is not None:
         return _ACCOUNTS_CACHE
@@ -433,11 +439,30 @@ class _ProfilesProxy(dict):
 
     保留它是为了兼容既有调用（`sorted(PRESET_PROFILES)` 等），
     同时让账号配置可以在运行时从文件加载。
+
+    ⚠️ 审计发现的坑（2026-10-12）：朴素实现里 `clear()` 会**被 _ensure
+    立刻重新填满** —— 表现为「clear 完还是 6 个」，导致 `reload_profiles()`
+    无法真正刷新（改了 accounts.local.json 不生效）。
+
+    修法：加 `_cleared` 标志。clear 后不自动重填，
+    要恢复必须显式调 `reload_profiles()`。
     """
 
+    def __init__(self) -> None:
+        super().__init__()
+        #: clear 之后不再自动填充 —— 避免「刚清完立刻又满」
+        self._cleared = False
+
     def _ensure(self) -> None:
+        if self._cleared:
+            return
         if not dict.__len__(self):
             dict.update(self, _load_profiles())
+
+    def clear(self) -> None:  # type: ignore[override]
+        """清空并**停止**自动填充。用 reload_profiles() 恢复。"""
+        self._cleared = True
+        dict.clear(self)
 
     def __len__(self) -> int:
         self._ensure()
@@ -471,15 +496,27 @@ class _ProfilesProxy(dict):
         self._ensure()
         return dict.__getitem__(self, key)
 
+    def __repr__(self) -> str:
+        self._ensure()
+        return dict.__repr__(self)
+
 
 PRESET_PROFILES: dict[str, AccountProfile] = _ProfilesProxy()
 
 
 def reload_profiles() -> None:
-    """清缓存并重新加载（改了 accounts.local.json 后调用）。"""
+    """清缓存并重新加载（改了 accounts.local.json 后调用）。
+
+    ⚠️ 顺序重要：先清模块级缓存 → 再清代理 → 最后恢复自动填充，
+    这样下一次访问会真正重新读文件。
+    """
     global _ACCOUNTS_CACHE
     _ACCOUNTS_CACHE = None
-    PRESET_PROFILES.clear()
+
+    proxy = PRESET_PROFILES
+    if isinstance(proxy, _ProfilesProxy):
+        proxy.clear()
+        proxy._cleared = False  # 允许下次访问时重新加载
 
 
 def get_preset(name: str) -> AccountProfile:

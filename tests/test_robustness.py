@@ -139,7 +139,54 @@ class TestTypeRobustness:
 
 
 class TestConcurrency:
-    """并发场景之前完全没测过。"""
+    """并发场景。
+
+    ⚠️ 实测踩过的坑（2026-10-12）：并发写测试**偶发失败**
+    （单独跑通过、全量跑偶尔挂）。
+
+    根因：SQLite 默认 rollback journal 模式，**写操作锁全库**，
+    多线程同时写必然偶发 `database is locked`。
+
+    修法：WAL 模式 + busy_timeout（见 store._conn）。
+    """
+
+    def test_wal_mode_enabled(self, tmp_path):
+        """连接必须启用 WAL —— 否则并发写会锁库。"""
+        s = SnapshotStore(tmp_path / "t.db")
+        mode = s._conn.execute("PRAGMA journal_mode").fetchone()[0]
+        assert mode.lower() == "wal", f"未启用 WAL，当前 {mode} —— 并发写会失败"
+        busy = s._conn.execute("PRAGMA busy_timeout").fetchone()[0]
+        assert busy >= 5000, f"busy_timeout 太小: {busy}"
+        s.close()
+
+    def test_heavy_concurrent_writes(self, tmp_path):
+        """16 线程 × 20 次写入，用 barrier 强制同时开始，加压验证不丢数据。"""
+        import threading
+
+        s = SnapshotStore(tmp_path / "t.db")
+        errors: list[Exception] = []
+        barrier = threading.Barrier(16, timeout=15)
+
+        def worker(i: int) -> None:
+            try:
+                barrier.wait()
+                for j in range(20):
+                    s.save_hot_topics([topic(f"线程{i}话题{j}")])
+            except Exception as e:  # noqa: BLE001
+                errors.append(e)
+
+        threads = [threading.Thread(target=worker, args=(i,)) for i in range(16)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        assert not errors, f"并发写失败 {len(errors)} 次: {errors[:3]}"
+        stats = s.stats()
+        assert stats["total_snapshots"] == 320, (
+            f"写入丢失: 期望 320 条，实际 {stats['total_snapshots']}"
+        )
+        s.close()
 
     def test_concurrent_store_writes(self, tmp_path):
         """多线程写快照——SQLite 连接不能跨线程共享。"""
