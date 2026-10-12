@@ -10,7 +10,17 @@ import io
 from pathlib import Path
 
 # 强制 UTF-8 输出，避免 Windows 控制台编码问题
-sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
+# ⚠️ 原本这里是 `sys.stdout = io.TextIOWrapper(sys.stdout.buffer, ...)`，
+# 那会在**模块导入时**替换掉全局 stdout 对象。
+# 后果：pytest 的终端对象仍指向旧流，之后任何写操作抛
+# `ValueError: I/O operation on closed file`，整个测试会话崩掉。
+# （实测：这会让 428 个测试一个都跑不出来，与被测代码无关。）
+#
+# reconfigure() 是**就地**改编码，不换对象 —— 这才是模块级该做的事。
+try:  # stdout 可能被 pytest 换成了无 buffer 的对象
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except (AttributeError, ValueError):
+    pass
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
