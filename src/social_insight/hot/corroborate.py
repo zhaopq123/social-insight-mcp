@@ -355,6 +355,31 @@ def corroborate(
     # --- 3. 逐组匹配，累积证据 ---
     clusters: list[dict[str, Any]] = []
 
+    # ── 性能：bigram 倒排索引做候选过滤 ──
+    #
+    # 原实现对每个话题线性扫**全部**已有簇并跑完整的 `_is_same_topic`
+    # （含 LCS，O(n·m)），整体 O(n²·m)。实测 2000 条热点要 236ms。
+    #
+    # 优化依据（**保证不漏召回**）：
+    #   · 闸门 1 是 bigram Jaccard ≥ 阈值(≥0.5) → 必然**共享至少一个 bigram**
+    #   · 闸门 2/3 要 LCS ≥ ENTITY_MIN_LEN(≥2) → 连续子串长度 ≥2
+    #     必然产生至少一个共享 bigram
+    #   · 极性守卫只会**否决**，不会让「不共享 bigram」的两项变成同话题
+    #
+    # 所以「共享至少一个 bigram」是同话题的**必要条件**。
+    # 只在共享 bigram 的簇里做完整判定，结果与全扫完全一致，
+    # 但候选规模从 O(簇数) 降到 O(共享 bigram 的簇数)，通常是 1~几个。
+    #
+    # ⚠️ 顺序敏感：必须保持「按 clusters 原有顺序取第一个匹配」，
+    #    否则合并顺序变化会改变哪个簇当代表 —— 那会影响 best_position 等输出。
+    #    下面按索引升序遍历候选来保证这一点。
+    bigram_index: dict[str, set[int]] = {}
+
+    def _bigrams(s: str) -> set[str]:
+        if len(s) < 2:
+            return set()
+        return {s[i : i + 2] for i in range(len(s) - 1)}
+
     for group_key, group_topics in ordered_groups:
         # 组内先按「权重高、排名前」排序，让代表标题取到最好的那个
         group_topics = sorted(
@@ -366,13 +391,28 @@ def corroborate(
             if not norm:
                 continue
 
+            # 候选 = 共享任一 bigram 的簇（按创建顺序升序）
+            grams = _bigrams(norm)
+            if grams:
+                candidate_ids: set[int] = set()
+                for g in grams:
+                    candidate_ids |= bigram_index.get(g, set())
+            else:
+                # 长度 < 2 的退化情况：无法用 bigram 过滤，退回全扫
+                candidate_ids = set(range(len(clusters)))
+
             target = None
-            for c in clusters:
-                if _is_same_topic(norm, c["norm"]):
-                    target = c
-                    break
+            if candidate_ids:
+                for ci in sorted(candidate_ids):
+                    c = clusters[ci]
+                    if _is_same_topic(norm, c["norm"]):
+                        target = c
+                        break
 
             if target is None:
+                new_idx = len(clusters)
+                for g in _bigrams(norm):
+                    bigram_index.setdefault(g, set()).add(new_idx)
                 clusters.append(
                     {
                         "norm": norm,
