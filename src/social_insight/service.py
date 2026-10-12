@@ -15,11 +15,13 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from .errors import ErrorCode, ToolError, success
 from .hot.corroborate import corroborate, summarize
 from .hot.match import PRESET_PROFILES
+from .singleflight import SingleFlight
 from .store import SnapshotStore
 
 #: 预设账号名，用于错误提示的 alternatives
@@ -169,6 +171,15 @@ class SocialInsightService:
         self.http = http or HttpClient()
         #: 快照存储。为 None 时 trend 会明确报错（而不是静默返回空）
         self.store = store
+        #: in-flight 请求合并。
+        #:
+        #: ⚠️ 多会话场景的关键优化（2026-10-13 压测实测）：
+        #: N 个会话同参并发调 hot_topics/topic_match 时，抓取阶段
+        #: 只执行一次，后到者共享结果。没有它，N 个并发 = N 遍上游
+        #: 抓取 + N 遍 CPU 聚类，事件循环被反复堵死
+        #: （实测 20 并发 mixed p99 22s，capabilities 这种纯内存
+        #: 调用都被拖到 p50 2.4s）。
+        self._fetch_flight = SingleFlight()
 
     async def aclose(self) -> None:
         await self.http.aclose()
@@ -326,8 +337,14 @@ class SocialInsightService:
                 alternatives=sorted(FETCHERS),
             )
 
-        topics, failures = await fetch_many(
-            self.http, chosen, limit_per_source=limit_per_source
+        # ── 抓取阶段：in-flight 合并 ──
+        # 相同 (源, limit) 的并发请求只抓一次上游。
+        # ⚠️ 这不改变语义：拿到的仍是实时数据，合并的只是
+        # 「同时发生」的重复劳动。与 TTL 缓存返回旧数据有本质区别。
+        flight_key = ("fetch", tuple(chosen), limit_per_source)
+        topics, failures = await self._fetch_flight.run(
+            flight_key,
+            lambda: fetch_many(self.http, chosen, limit_per_source=limit_per_source),
         )
 
         # 全部源失败 → 明确的错误（而不是空结果）
@@ -354,7 +371,15 @@ class SocialInsightService:
                 meta={"failures": failures, "mode": "raw"},
             )
 
-        results = corroborate(
+        # ── 交叉验证：CPU 密集，卸载到线程 ──
+        # ⚠️ 多会话公平性的关键（2026-10-13 压测实测）：
+        # corroborate 对几百条话题做两两相似度（bigram + LCS），
+        # 同步跑会**独占事件循环数百毫秒**——期间其他会话的
+        # 任何请求（包括 capabilities 这种纯内存调用）全部排队。
+        # 实测：卸载前 20 并发 mixed 的 capabilities p50=2.45s（单发仅 50ms）。
+        # to_thread 后事件循环保持自由，轻请求不再被重请求堵死。
+        results = await asyncio.to_thread(
+            corroborate,
             topics,
             independence_of={k: v["independence"] for k, v in SOURCE_META.items()},
             weight_of={k: v["weight"] for k, v in SOURCE_META.items()},
@@ -363,7 +388,8 @@ class SocialInsightService:
         )
 
         # 落快照（增值功能，失败不影响主流程）
-        saved = self._maybe_snapshot(topics)
+        # sqlite 写同样卸载：批量 INSERT ~300 条会阻塞事件循环。
+        saved = await self._maybe_snapshot(topics)
 
         return success(
             {
@@ -380,16 +406,19 @@ class SocialInsightService:
             },
         )
 
-    def _maybe_snapshot(self, topics: list[Any]) -> int:
+    async def _maybe_snapshot(self, topics: list[Any]) -> int:
         """把抓到的热点落快照（若存储层已启用）。
 
         失败**不影响主流程**——快照是增值功能，不是核心能力。
         但会记到 meta 里，让调用方知道。
+
+        sqlite 写在线程里跑：批量 INSERT 是磁盘 IO，
+        同步执行会阻塞事件循环（多会话场景下拖累所有轻请求）。
         """
         if self.store is None or not topics:
             return 0
         try:
-            return self.store.save_hot_topics(topics)
+            return await asyncio.to_thread(self.store.save_hot_topics, topics)
         except Exception:
             # 存储失败不该让热点查询失败
             return 0
@@ -424,8 +453,10 @@ class SocialInsightService:
                 ],
             )
 
+        # sqlite 读卸载到线程：trending 模式是全表 GROUP BY 聚合，
+        # 同步跑会阻塞事件循环（多会话下拖累所有并发请求）。
         if word:
-            history = self.store.hot_history(word, limit=limit)
+            history = await asyncio.to_thread(self.store.hot_history, word, limit=limit)
             return success(
                 {
                     "word": word,
@@ -437,7 +468,10 @@ class SocialInsightService:
                 meta={"mode": "word"},
             )
 
-        items = self.store.trending_topics(hours=hours, limit=limit)
+        items, store_stats = await asyncio.gather(
+            asyncio.to_thread(self.store.trending_topics, hours=hours, limit=limit),
+            asyncio.to_thread(self.store.stats),
+        )
         return success(
             {
                 "topics": items,
@@ -445,7 +479,7 @@ class SocialInsightService:
                 "has_data": len(items) > 0,
                 "note": "" if items else f"近 {hours} 小时内无快照——需要先采集。",
             },
-            meta={"mode": "trending", "hours": hours, "stats": self.store.stats()},
+            meta={"mode": "trending", "hours": hours, "stats": store_stats},
         )
 
     async def topic_match(
@@ -551,8 +585,12 @@ class SocialInsightService:
                 alternatives=sorted(FETCHERS),
             )
 
-        topics, failures = await fetch_many(
-            self.http, chosen_sources, limit_per_source=limit_per_source
+        # 抓取阶段与 hot_topics 共享同一把 single-flight：
+        # 同参并发的 hot_topics + topic_match 只抓一次上游。
+        flight_key = ("fetch", tuple(chosen_sources), limit_per_source)
+        topics, failures = await self._fetch_flight.run(
+            flight_key,
+            lambda: fetch_many(self.http, chosen_sources, limit_per_source=limit_per_source),
         )
         if not topics:
             raise ToolError(
@@ -562,7 +600,10 @@ class SocialInsightService:
                 retryable=True,
             )
 
-        corroborated = corroborate(
+        # corroborate + match_topics 都是 CPU 密集（相似度聚类 + 打分），
+        # 卸载到线程保事件循环自由（详见 hot_topics 里的同款注释）。
+        corroborated = await asyncio.to_thread(
+            corroborate,
             topics,
             independence_of={k: v["independence"] for k, v in SOURCE_META.items()},
             weight_of={k: v["weight"] for k, v in SOURCE_META.items()},
@@ -581,7 +622,9 @@ class SocialInsightService:
             for c in corroborated
         }
 
-        matches = match_topics(topics, acct, corroboration_of=corr_of, top_n=top_n)
+        matches = await asyncio.to_thread(
+            match_topics, topics, acct, corroboration_of=corr_of, top_n=top_n
+        )
 
         return success(
             {

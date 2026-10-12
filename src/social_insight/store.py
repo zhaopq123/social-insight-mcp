@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import sqlite3
 import threading
+import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
@@ -96,6 +97,10 @@ class SnapshotStore:
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         self._local = threading.local()
+        #: stats() 的短 TTL 缓存。trending 模式每次调用都带 stats，
+        #: 而 stats 是全表 COUNT + COUNT(DISTINCT)（快照表随时间增长），
+        #: 5 秒内的统计值对调用方没有区别，缓存避免重复全表扫描。
+        self._stats_cache: tuple[float, dict[str, Any]] | None = None
         self._init_db()
 
     @property
@@ -250,8 +255,17 @@ class SnapshotStore:
             ).fetchall()
         return [dict(r) for r in rows]
 
+    #: stats 缓存 TTL（秒）。快照写入频率低（分钟级），5 秒足够。
+    _STATS_TTL = 5.0
+
     def stats(self) -> dict[str, Any]:
-        """存储层概况——用于诊断与验证。"""
+        """存储层概况——用于诊断与验证。5 秒 TTL 缓存。"""
+        now = time.monotonic()
+        if self._stats_cache is not None:
+            ts, cached = self._stats_cache
+            if now - ts < self._STATS_TTL:
+                return dict(cached)
+
         with self._tx() as c:
             total = c.execute("SELECT COUNT(*) FROM hot_snapshots").fetchone()[0]
             distinct = c.execute(
@@ -259,13 +273,15 @@ class SnapshotStore:
             ).fetchone()[0]
             earliest = c.execute("SELECT MIN(captured_at) FROM hot_snapshots").fetchone()[0]
             latest = c.execute("SELECT MAX(captured_at) FROM hot_snapshots").fetchone()[0]
-        return {
+        result = {
             "db_path": str(self.db_path),
             "total_snapshots": total,
             "distinct_topics": distinct,
             "earliest": earliest,
             "latest": latest,
         }
+        self._stats_cache = (now, result)
+        return dict(result)
 
     def prune(self, *, keep_days: int = 30) -> int:
         """清理旧快照，防止无限增长（手机存储空间有限）。
