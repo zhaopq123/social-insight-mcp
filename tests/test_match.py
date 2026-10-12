@@ -110,11 +110,52 @@ class TestPresets:
             get_preset("不存在的账号")
 
     def test_profiles_differ(self):
-        """两个预设必须真的不同——否则匹配没有意义。"""
+        """两个预设必须有**可区分的产品维度**。
+
+        ⚠️ 这个断言原来写的是「关键词零交集」，后来失效了——
+        因为补上经营维度后，两个号共用了「成本/订单」这类商业通用词。
+
+        「零交集」本身就是错的目标：两个号都是商业类账号，
+        共享经营词是**正常的**。真正需要保证的是**产品维度不同**——
+        那才是决定「同一批热点选出不同选题」的东西。
+        """
         s = get_preset("小赵聊软件")
         r = get_preset("小赵无人零售")
-        assert s.domains != r.domains
-        assert not set(s.keywords) & set(r.keywords)
+
+        # 产品维度必须互斥（软件 vs 硬件设备）
+        s_product = {"软件", "开发", "小程序", "代码", "系统"}
+        r_product = {"咖啡机", "冰淇淋机", "无人零售", "自动售货", "点位"}
+        assert s_product <= set(s.keywords), "软件号缺产品词"
+        assert r_product <= set(r.keywords), "零售号缺产品词"
+        assert not (s_product & r_product), "两个号的产品词不该重叠"
+
+    def test_profiles_share_business_dimension(self):
+        """两个号都应覆盖经营维度——它们是同一类商业账号。"""
+        for name in ("小赵聊软件", "小赵无人零售"):
+            p = get_preset(name)
+            assert "business" in p.domains, f"{name} 缺 business 领域"
+
+    def test_profiles_select_different_topics(self):
+        """**决定性**：同一批热点，两个号的首选必须不同。"""
+        from social_insight.models import HotTopic
+
+        topics = [
+            HotTopic(platform="x", word="某AI大模型开源发布", position=1,
+                     captured_at="2026-10-12T00:00:00Z"),
+            HotTopic(platform="x", word="无人咖啡机进驻写字楼", position=2,
+                     captured_at="2026-10-12T00:00:00Z"),
+            HotTopic(platform="x", word="某门店客流爆满被迫限流", position=3,
+                     captured_at="2026-10-12T00:00:00Z"),
+            HotTopic(platform="x", word="郑钦文退出武汉网球公开赛", position=4,
+                     captured_at="2026-10-12T00:00:00Z"),
+        ]
+        from social_insight.hot.match import match_topics
+
+        s_top = match_topics(topics, get_preset("小赵聊软件"), top_n=1)[0]
+        r_top = match_topics(topics, get_preset("小赵无人零售"), top_n=1)[0]
+        assert s_top.word != r_top.word, (
+            f"两个号选出同一个首选「{s_top.word}」——定位区分失效"
+        )
 
 
 # ══════════════════════════════════════════════════════════════════

@@ -26,20 +26,78 @@ from .store import SnapshotStore
 PRESET_NAMES = sorted(PRESET_PROFILES)
 
 
-def _match_summary(matches: list[Any]) -> dict[str, Any]:
-    """匹配结果概览。"""
+def _match_summary(matches: list[Any], profile_name: str = "", domains: list[str] | None = None) -> dict[str, Any]:
+    """匹配结果概览 + **对结果可靠性的诚实评估**。
+
+    ━━━ 为什么需要「可靠性评估」━━━
+
+    实测发现一个重要现实：**垂直领域题材天生只在单源出现**。
+
+    软件技术类专业热点集中在掘金（技术圈垂直站），受众是程序员；
+    而微博/百度的受众是大众——同一话题不会同时出现在两边。
+    直接后果：软件号的 strong 候选**全部来自掘金单源**（实测 8/8）。
+
+    这不是交叉验证失效，而是**交叉验证对垂直题材本来就不适用**。
+
+    但调用方看到 `single(1源)` 容易误读成「这个热点不够热」。
+    所以这里明确说明来源集中是正常现象还是异常。
+    """
+    from collections import Counter
+
     counts = {"strong": 0, "maybe": 0, "weak": 0}
     for m in matches:
         counts[m.level] = counts.get(m.level, 0) + 1
+
+    # 来源分布
+    src_counter: Counter[str] = Counter()
+    for m in matches:
+        # 显式处理 None（不用 `or []`）—— 保持全 src 的 falsy 回退零例外，
+        # 这样扫描测试才有意义（见 tests/test_param_semantics.py）
+        srcs = getattr(m, "sources", None)
+        for s in (srcs if srcs is not None else []):
+            src_counter[s] += 1
+
+    weak_ratio = round(counts["weak"] / len(matches), 2) if matches else 0.0
+
+    # 可靠性判断
+    if not matches:
+        reliability = "empty"
+        advice = "今天没有匹配的话题。按自己的常规选题节奏走，不要硬蹭。"
+    elif counts["strong"] == 0:
+        reliability = "weak-day"
+        advice = (
+            f"今天没有强相关话题（{counts['maybe']} 个勉强沾边）。"
+            "可能是全网热点与你的号都不搭——**这本身是有用信息**，别硬凑。"
+        )
+    elif src_counter and len(src_counter) == 1:
+        only = next(iter(src_counter))
+        reliability = "single-source-domain"
+        advice = (
+            f"强候选全部来自单一源「{only}」。"
+            "**垂直领域题材本就该如此**——技术类在掘金、美妆在小红书，"
+            "跨平台重合度天然低（受众不同）。这不代表话题不热，"
+            "但意味着它可能是该圈层的内部热点，出圈风险需自行判断。"
+        )
+    else:
+        reliability = "mixed"
+        advice = "候选来源较分散，可按分数与来源自行取舍。"
+
     return {
+        "profile": profile_name,
+        "domains": list(domains) if domains is not None else [],
         "total": len(matches),
         **counts,
+        "weak_ratio": weak_ratio,
+        "source_distribution": dict(src_counter.most_common()),
+        "reliability": reliability,
+        "advice": advice,
         "hint": (
             "score 是与账号定位的匹配度，corroboration 是热点本身的强度。 "
             "**两者分开看**——很火但不相关的话题不该因为火就排前面。"
             "level: strong=可做 / maybe=勉强 / weak=不建议。"
         ),
     }
+
 from .hot.sources import (
     DEFAULT_SOURCES,
     FETCHERS,
@@ -453,7 +511,16 @@ class SocialInsightService:
         )
 
         # 交叉验证信息（用于把「火」与「相关」分开呈现）
-        corr_of = {c.word: {"level": c.level, "source_count": c.source_count} for c in corroborated}
+        # ⚠️ 必须带上 sources —— 实测踩过：漏了它导致调用方看到
+        # `sources: []`，进而误判「候选来源分散」（实际全是单一源）。
+        corr_of = {
+            c.word: {
+                "level": c.level,
+                "source_count": c.source_count,
+                "sources": c.sources,
+            }
+            for c in corroborated
+        }
 
         matches = match_topics(topics, acct, corroboration_of=corr_of, top_n=top_n)
 
@@ -462,7 +529,7 @@ class SocialInsightService:
                 "profile": acct.to_dict(),
                 "matches": [m.to_dict() for m in matches],
                 "count": len(matches),
-                "summary": _match_summary(matches),
+                "summary": _match_summary(matches, acct.name, acct.domains),
             },
             meta={
                 "raw_hot_count": len(topics),
