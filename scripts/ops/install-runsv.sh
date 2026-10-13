@@ -29,7 +29,7 @@ set -u
 
 PREFIX_DIR=/data/data/com.termux/files/usr
 SERVICE_DIR="$PREFIX_DIR/var/service"
-LOG_DIR="$PREFIX_DIR/../files/home/logs"
+LOG_DIR="$PREFIX_DIR/../home/logs"
 
 # 服务名 → 容器内启动脚本
 SERVICES="shared-memory:/opt/shared-memory-mcp/start-mcp.sh
@@ -79,7 +79,7 @@ sleep 3
 exec >>"\$LOG" 2>&1
 echo "[runsv] \$(date '+%F %T') 启动 $name"
 
-exec proot-distro login ubuntu -- $start
+exec proot-distro login ubuntu -- bash $start
 RUNEOF
     chmod 755 "$SERVICE_DIR/$name/run"
 }
