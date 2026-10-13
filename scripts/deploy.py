@@ -172,11 +172,19 @@ ls -la "$TARGET" | head -12
 
 echo ""
 echo "=== 修复执行权限 ==="
-# ⚠️ tar 解包不带执行位（实测踩过：start-mcp.sh Permission denied，
-#    守护循环会陷入「启动失败→重试」的死循环）
+# ⚠️ tar 解包不带执行位（实测踩过 3 次）：
+#   1. start-mcp.sh Permission denied → 守护循环死循环
+#   2. check-daemon.sh 加好了权限但下一次部署又被解包覆盖
+#   3. 脚本写在本机是 UTF-8 + LF，部署到服务器也要保持可执行
+#
+# 结论：**每次部署都要把所有 .sh 和 .py 脚本重打执行位**，
+#       不能依赖「上次已经 chmod 过」。
 chmod +x "$TARGET/start-mcp.sh"
 chmod +x "$TARGET"/scripts/*.py 2>/dev/null || true
+find "$TARGET/scripts" -name '*.sh' -exec chmod +x {} + 2>/dev/null || true
+echo "  已设置执行位:"
 ls -la "$TARGET/start-mcp.sh"
+find "$TARGET/scripts" -name '*.sh' | head -12 | sed 's/^/    /'
 
 echo ""
 echo "=== venv ==="
@@ -235,6 +243,11 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="部署 social-insight-mcp 到远程服务器")
     ap.add_argument("--skip-upload", action="store_true", help="跳过上传（只重装/重启）")
     ap.add_argument("--check", action="store_true", help="只探测环境")
+    ap.add_argument(
+        "--skip-restart",
+        action="store_true",
+        help="跳过重建长驻 tmux 会话（不推荐：长驻任务会跑旧代码）",
+    )
     args = ap.parse_args()
 
     print("=" * 68)
@@ -271,9 +284,47 @@ def main() -> int:
         return 1
 
     print("\n" + "=" * 68)
-    print("安装完成。下一步：启动服务（由 Termux 层守护）")
+    print("部署完成")
     print("=" * 68)
+    if not args.skip_restart:
+        code, out = restart_daemons()
+        print(out)
+        if code != 0:
+            print("\n[WARN] 守护会话重建失败（服务可能仍在跑旧代码）")
+    else:
+        print("已跳过守护会话重建（--skip-restart）")
+        print("  ⚠️ 注意：tmux 里的长驻任务仍在跑**旧代码**——")
+        print("     手动重启：python scripts/run_termux.py scripts/ops/restart-daemon.sh")
     return 0
+
+
+#: 需要重建的长驻会话（Termux 层）
+DAEMON_SESSIONS = ("social-insight", "social-insight-snapshot")
+
+
+def restart_daemons() -> tuple[int, str]:
+    """部署后自动重建长驻 tmux 会话。
+
+    ⚠️ 为什么必须做：改了源码，服务是热加载新代码，
+    但 tmux 里的长驻任务（守护循环、定时采集）跑的还是**部署前那份**。
+    实测后果（2026-10-13）：snapshot 采集脚本旧代码跑一整天，
+    WAL 一路涨到 58 MB 才被发现。
+
+    所以部署完必须重建这两个会话，否则改了也白改。
+    """
+    print("\n─── 重建长驻会话 " + "─" * 40)
+    script = Path(__file__).resolve().parent / "ops" / "restart-daemon.sh"
+    if not script.is_file():
+        return 1, f"[ERROR] 找不到 {script}"
+
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    from run_termux import run_termux
+
+    # ⚠️ 注意：run_termux 收的是 **argv 列表**（argv[0]=程序 argv[1]=脚本
+    # argv[2:]=透传参数）。早期版本收单个字符串，签名改过——
+    # 写成 run_termux(str(script)) 会静默拿不到脚本名（然后报「脚本不存在: 」）。
+    code = run_termux(["run_termux.py", str(script)])
+    return (0, "守护会话已重建") if code == 0 else (code, f"[ERROR] 重建失败 exit={code}")
 
 
 if __name__ == "__main__":
