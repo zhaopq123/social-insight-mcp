@@ -76,7 +76,7 @@
 ## 安装
 
 ```bash
-git clone <repo>
+git clone https://github.com/zhaopq123/social-insight-mcp.git
 cd social-insight-mcp
 python -m venv .venv
 .venv/bin/pip install -e .          # Linux/macOS
