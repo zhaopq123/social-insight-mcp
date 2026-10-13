@@ -289,11 +289,26 @@ class SocialInsightService:
         limit_per_source: int = 50,
         corroborate_result: bool = True,
         min_sources: int = 1,
+        top_n: int = 20,
+        single_limit: int | None = 5,
     ) -> dict[str, Any]:
         """多源热榜聚合 + 跨源交叉验证。
 
         corroborate_result=True（默认）时，返回的是**交叉验证后**的话题：
         每条带 source_count 与 level（confirmed/likely/single）。
+
+        ━━━ 输出分层（产品视角，2026-10-13）━━━
+
+        实测问题：204 条返回里 186 条是 single（91%），confirmed 只有 3 条。
+        用户要「今天值得做的选题」，却被迫在 200 条各站榜单里自己挑。
+        **筛选该由服务端做，不该甩给用户和 AI。**
+
+        · ``topics``      只放 confirmed + likely（多源验证过的），默认最多 20 条
+        · ``also_on_single`` single 话题折叠，**只给样本**（默认 5 条）+ 总数；
+                          想看全部显式 ``single_limit=0``
+
+        ⚠️ 排序只用「独立源数 → 最佳排名」两个**可比**维度。
+        跨源热度值不可比（抖音 1200万 vs 今日热榜 4），已从主列表剔除。
         """
         # ⚠️ 参数边界必须在抓取**之前**校验。
         #
@@ -402,9 +417,91 @@ class SocialInsightService:
         # 默认线程池 + WAL 写互斥串行，把 trend 等读操作也堵出秒级排队。
         saved = await self._maybe_snapshot(topics, flight_key=flight_key)
 
+        # ── 输出分层（产品视角改造，2026-10-13）──
+        #
+        # ⚠️ 实测问题 1：204 条返回里 186 条是 single（91%），
+        #    confirmed 只有 3 条。用户要「今天值得做的选题」，
+        #    却被迫在 200 条各站榜单里自己挑——**筛选该由服务端做**。
+        #
+        # ⚠️ 实测问题 2（改造初版自己犯的错）：把 289 条 single
+        #    **全量塞进 also_on_single**，输出反而从 25 KB 涨到 64.5 KB。
+        #    一边说「别给用户看噪音」，一边把噪音全给他——
+        #    自相矛盾。
+        #
+        # 修正后的设计：
+        #   topics            只放 confirmed + likely，最多 top_n 条
+        #   also_on_single    只给**数量**与**前若干条样本**（默认 5），
+        #                     想看全部得显式 single_limit=0（不限）
+        from .hot.brief import compress_title
+
+        # 跨源热度不可比（抖音 1200万 vs 今日热榜 4），
+        # 排序只用「独立源数 + 最佳排名」两个可比维度。
+        strong, single_items = [], []
+        for r in results:
+            first = next((t for t in topics if t.word == r.word), None)
+            if first is None:
+                continue
+            brief, compressed = compress_title(r.word)
+            item = {
+                "word": r.word,
+                "brief": brief,
+                "brief_compressed": compressed,
+                "level": r.level,
+                "source_count": r.source_count,
+                "sources": r.sources,
+                "source_keys": r.source_keys,
+                "platforms": r.platforms,
+                "best_position": r.best_position,
+                "url": first.url or "",
+                "variants": r.variants,
+            }
+            if r.source_count >= 2:
+                strong.append(item)
+            else:
+                # single 只留最小信息（一句话说清是什么 + 从哪来）
+                single_items.append({
+                    "word": r.word,
+                    "brief": brief,
+                    "source_display": r.sources[0] if r.sources else "",
+                    "best_position": r.best_position if r.best_position is not None else 999,
+                    "url": first.url or "",
+                })
+
+        strong.sort(key=lambda x: (-x["source_count"], x["best_position"]))
+        single_items.sort(key=lambda x: x["best_position"])
+
+        # 主列表截断（默认 20 条，够看且不炸上下文）
+        top_n = _check_bounds("top_n", top_n)
+        strong = strong[:top_n]
+
+        # single 折叠：只给样本，默认 5 条；0 = 不限（显式要全量）
+        if single_limit is None:
+            single_sample = single_items[:5]
+            single_truncated = len(single_items) > 5
+        elif single_limit <= 0:
+            single_sample = single_items
+            single_truncated = False
+        else:
+            single_sample = single_items[:single_limit]
+            single_truncated = len(single_items) > single_limit
+
         return success(
             {
-                "topics": [r.to_dict() for r in results],
+                "topics": strong,
+                "count": len(strong),
+                "also_on_single": {
+                    "note": (
+                        "以下话题只在**单一来源**出现——那是该站自己的榜单，"
+                        "不是全网热点。列在这里供参考，不做推荐。"
+                    ),
+                    "count": len(single_items),
+                    "truncated": single_truncated,
+                    "items": single_sample,
+                    "see_all": (
+                        "想看全部 single 话题：加 single_limit=0"
+                        if single_truncated else ""
+                    ),
+                },
                 "summary": summarize(results),
             },
             meta={
@@ -416,7 +513,6 @@ class SocialInsightService:
                 "storage_enabled": self.store is not None,
             },
         )
-
     async def _maybe_snapshot(self, topics: list[Any], *, flight_key: tuple = ()) -> int:
         """把抓到的热点落快照（若存储层已启用）。
 
@@ -832,7 +928,17 @@ class SocialInsightService:
                 "sources": c.sources,
             })
 
-        items.sort(key=lambda x: (-x["independent_source_count"], -x["hot_value"]))
+        # 按可信度排序：**独立源数 → 最佳排名**。
+        #
+        # ⚠️ 刻意不用热度值参与排序——跨源不可比
+        #    （抖音 1200万 / 百度 null / 今日热榜 4）。
+        #    实测踩过：按 max_hot_value 排，抖音内容永远霸榜，
+        #    只因为它的体量大，不是因为更值得做。
+        best_pos = {c.word: c.best_position for c in corroborated}
+        items.sort(
+            key=lambda x: (-x["independent_source_count"],
+                           best_pos.get(x["title"]) or 999)
+        )
         items = items[:top_n]
 
         # 落快照（与 hot_topics 一致，让 trend 有数据可用）

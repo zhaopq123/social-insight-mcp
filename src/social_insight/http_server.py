@@ -76,6 +76,101 @@ def default_service() -> SocialInsightService:
     return SocialInsightService(store=store)
 
 
+# ────────────────────────────────────────────────────────────────
+# 严格模型兼容：schema 归一化
+#
+# ⚠️ 为什么需要（2026-10-13 实测结论）：
+#    FastMCP 自动生成的 tools/list 对**严格模型**是毒药——
+#      1. 每个工具都带 outputSchema（{"type":"object","additionalProperties":true}）
+#      2. `X | None = None` 参数在 inputSchema 里生成 anyOf: [T, {type: null}]
+#    实测 GLM-5.3-Flash / Deepseek-V4.1-Flash / Step-5-Preview 逐字校验
+#    工具 schema，命中任一条直接拒整个请求：
+#        11129 "The tool definition does not meet the model requirements"
+#        11133 "Invalid request parameters"
+#    而宽松模型（Hy3/混元）不校验——所以表现为
+#    「换模型就好、过一会又坏」的幽灵故障。
+#
+#    修法两件事，都在注册后一次性完成：
+#      1. output_schema → None（fastmcp 官方支持的禁用方式，
+#         见 fastmcp/tools/base.py「set your tool's output_schema to None」）
+#      2. anyOf: [T, null] 压成 T（保留 default/description，
+#         对模型的语义不变——参数本来就是可选的）
+#
+#    stdio 路径（server.py）的 schema 是手写的 JSON Schema，
+#    天生没有这两个问题，无需处理。
+# ────────────────────────────────────────────────────────────────
+def _flatten_null_union(node: Any) -> Any:
+    """递归压平 ``anyOf: [T, {"type": "null"}]`` → ``T``。
+
+    只压「恰好一个非 null 分支」的 anyOf；多分支 anyOf
+    （本仓库没有，但不保证上游不引入）原样保留并递归子节点。
+    """
+    if isinstance(node, dict):
+        any_of = node.get("anyOf")
+        if isinstance(any_of, list):
+            non_null = [
+                s
+                for s in any_of
+                if not (isinstance(s, dict) and s.get("type") == "null")
+            ]
+            if len(non_null) == 1:
+                merged: dict[str, Any] = dict(non_null[0])
+                for k, v in node.items():
+                    if k != "anyOf":
+                        merged[k] = _flatten_null_union(v)
+                return merged
+        return {k: _flatten_null_union(v) for k, v in node.items()}
+    if isinstance(node, list):
+        return [_flatten_null_union(item) for item in node]
+    return node
+
+
+def _iter_registered_tools(mcp: Any) -> list[Any]:
+    """取出已注册的 Tool 对象（跨 fastmcp 版本布局探测，按实测版本优先）。
+
+    fastmcp 4.1.0（本仓部署版）：``mcp._local_provider._components``
+    fastmcp 4.x 其他布局：      ``mcp._provider._components``
+    fastmcp 2/3.x：             ``mcp._tool_manager._tools``
+    """
+    probes = (
+        lambda m: getattr(getattr(m, "_local_provider", None), "_components", None),
+        lambda m: getattr(getattr(m, "_provider", None), "_components", None),
+        lambda m: getattr(getattr(m, "_tool_manager", None), "_tools", None),
+    )
+    for probe in probes:
+        try:
+            store = probe(mcp)
+        except Exception:  # noqa: BLE001 —— 探测失败就试下一种布局
+            continue
+        if isinstance(store, dict):
+            found = [
+                v
+                for v in store.values()
+                if hasattr(v, "parameters") and hasattr(v, "output_schema")
+            ]
+            if found:
+                return found
+    return []
+
+
+def _normalize_strict_schemas(mcp: Any) -> tuple[int, int]:
+    """归一化全部已注册工具的 schema，返回 (去 output_schema 数, 压平 anyOf 数)。"""
+    import json as _json
+
+    n_out = 0
+    n_anyof = 0
+    for tool in _iter_registered_tools(mcp):
+        if getattr(tool, "output_schema", None) is not None:
+            tool.output_schema = None
+            n_out += 1
+        params = getattr(tool, "parameters", None)
+        if isinstance(params, dict) and "anyOf" in _json.dumps(params, ensure_ascii=False):
+            flat = _flatten_null_union(params)
+            tool.parameters = flat
+            n_anyof += 1
+    return n_out, n_anyof
+
+
 def build_app(service: SocialInsightService | None = None) -> Any:
     """构造 FastMCP ASGI 应用。"""
     try:
@@ -88,6 +183,43 @@ def build_app(service: SocialInsightService | None = None) -> Any:
 
     svc = service or default_service()
     mcp = FastMCP("social-insight-mcp")
+
+    # ────────────────────────────────────────────────────────────────
+    # 参数校验门
+    #
+    # ⚠️ 为什么需要：FastMCP 用 pydantic 校验参数。缺必填参数时，
+    #    它抛出的是 pydantic 原始错误——
+    #        1 validation error for call[content_search]
+    #        keyword  Missing required argument [...]
+    #    这是**框架内部细节**，用户（创作者）看到只会懵。
+    #
+    #    而 stdio 路径（server._dispatch）走的是 ToolError 信封，
+    #    报的是人能读的 INVALID_ARGUMENT。
+    #
+    #    同一个工具不该因为传输方式不同而有不同的错误体验。
+    #
+    # ━━━ 实现要点 ━━━
+    #    1. 必填参数写成 ``= None`` 带默认值 —— 否则 pydantic 先抛错，
+    #       根本到不了我们的代码
+    #    2. `_need` **返回错误信封而不是 raise** —— 因为 raise 的位置
+    #       在 _safe() 外面，FastMCP 会当成未处理异常往上抛
+    #       （实测踩过：错误内容是对的，但没进信封）
+    # ────────────────────────────────────────────────────────────────
+    def _need(args: dict, *names: str) -> dict | None:
+        """校验必填参数。**有缺失时返回错误信封**，正常时返回 None。"""
+        missing = [n for n in names if args.get(n) in (None, "")]
+        if not missing:
+            return None
+        return ToolError(
+            code=ErrorCode.INVALID_ARGUMENT,
+            message=f"缺少必填参数：{', '.join(missing)}",
+            reason="这些参数不能为空。平台类工具需要指定「对哪个平台、拿什么内容」。",
+            alternatives=[
+                "先用 capabilities 看清每个平台支持什么",
+                "补齐参数后重试",
+            ],
+            details={"missing": missing},
+        ).to_dict()
 
     # ─────────────────── 元信息 ───────────────────
     @mcp.tool()
@@ -108,6 +240,8 @@ def build_app(service: SocialInsightService | None = None) -> Any:
         sources: list[str] | None = None,
         limit_per_source: int = 50,
         min_sources: int = 1,
+        top_n: int = 20,
+        single_limit: int | None = 5,
     ) -> dict:
         """多源热榜聚合 + 跨源交叉验证（核心能力，无需登录）。
 
@@ -120,6 +254,14 @@ def build_app(service: SocialInsightService | None = None) -> Any:
         **已按独立性去重**：镜像源（如 uapis 的抖音榜 = 抖音官方榜）
         不会重复计数，避免虚假信心。
 
+        ━━━ 输出分层 ━━━
+          · ``topics``        只放 confirmed + likely（多源验证过的），默认最多 20 条
+          · ``also_on_single`` single 话题折叠，只给样本（默认 5 条）+ 总数；
+                              想看全部显式 ``single_limit=0``
+
+        排序只用「独立源数 → 最佳排名」两个**可比**维度；
+        跨源热度值不可比（抖音 1200万 vs 今日热榜 4），已剔除。
+
         sources 参数填**源名**（如 douyin、uapis:weibo、uapis:xiaohongshu），
         不填则用默认组合。调用 capabilities 可看到全部可用源。
         min_sources 设 2 可只看交叉验证过的话题。
@@ -129,6 +271,8 @@ def build_app(service: SocialInsightService | None = None) -> Any:
                 sources=sources,
                 limit_per_source=limit_per_source,
                 min_sources=min_sources,
+                top_n=top_n,
+                single_limit=single_limit,
             )
         )
 
@@ -232,8 +376,8 @@ def build_app(service: SocialInsightService | None = None) -> Any:
     # ─────────────────── 链路 B · 平台内容 ───────────────────
     @mcp.tool()
     async def content_search(
-        platform: str,
-        keyword: str,
+        platform: str | None = None,
+        keyword: str | None = None,
         sort: str = "general",
         time_range: str | None = None,
         limit: int = 20,
@@ -247,6 +391,9 @@ def build_app(service: SocialInsightService | None = None) -> Any:
         注意：抖音搜索需 a_bogus 签名、小红书需登录 cookie，
         两者当前都可能返回结构化错误说明原因与替代路径。
         """
+        _err = _need({"platform": platform, "keyword": keyword}, "platform", "keyword")
+        if _err:
+            return _err
         return await _safe(
             svc.content_search(
                 platform=platform,
@@ -259,18 +406,21 @@ def build_app(service: SocialInsightService | None = None) -> Any:
         )
 
     @mcp.tool()
-    async def content_detail(platform: str, id_or_url: str) -> dict:
+    async def content_detail(platform: str | None = None, id_or_url: str | None = None) -> dict:
         """获取单条内容详情。可传作品 ID 或完整 URL。
 
         小红书注意：详情必须携带搜索结果里的 xsec_token，
         所以调用顺序被强制 —— 先 content_search，再 content_detail。
         """
+        _err = _need({"platform": platform, "id_or_url": id_or_url}, "platform", "id_or_url")
+        if _err:
+            return _err
         return await _safe(svc.content_detail(platform=platform, id_or_url=id_or_url))
 
     @mcp.tool()
     async def content_comments(
-        platform: str,
-        id_or_url: str,
+        platform: str | None = None,
+        id_or_url: str | None = None,
         level: int = 1,
         limit: int = 20,
         cursor: str | None = None,
@@ -279,6 +429,9 @@ def build_app(service: SocialInsightService | None = None) -> Any:
 
         level=1 取一级评论，level=2 含二级评论。
         """
+        _err = _need({"platform": platform, "id_or_url": id_or_url}, "platform", "id_or_url")
+        if _err:
+            return _err
         return await _safe(
             svc.content_comments(
                 platform=platform,
@@ -290,19 +443,25 @@ def build_app(service: SocialInsightService | None = None) -> Any:
         )
 
     @mcp.tool()
-    async def creator_profile(platform: str, id_or_url: str) -> dict:
+    async def creator_profile(platform: str | None = None, id_or_url: str | None = None) -> dict:
         """获取创作者主页信息（昵称、简介、粉丝数、作品数）。做对标分析时用。"""
+        _err = _need({"platform": platform, "id_or_url": id_or_url}, "platform", "id_or_url")
+        if _err:
+            return _err
         return await _safe(svc.creator_profile(platform=platform, id_or_url=id_or_url))
 
     @mcp.tool()
     async def creator_works(
-        platform: str,
-        id_or_url: str,
+        platform: str | None = None,
+        id_or_url: str | None = None,
         sort: str = "latest",
         limit: int = 20,
         cursor: str | None = None,
     ) -> dict:
         """获取某创作者的作品列表。对标账号拆解的主力工具。"""
+        _err = _need({"platform": platform, "id_or_url": id_or_url}, "platform", "id_or_url")
+        if _err:
+            return _err
         return await _safe(
             svc.creator_works(
                 platform=platform,
@@ -316,7 +475,7 @@ def build_app(service: SocialInsightService | None = None) -> Any:
     # ─────────────────── 分析（确定性算法）───────────────────
     @mcp.tool()
     async def analyze_viral(
-        platform: str,
+        platform: str | None = None,
         keyword: str | None = None,
         creator: str | None = None,
         limit: int = 30,
@@ -330,6 +489,20 @@ def build_app(service: SocialInsightService | None = None) -> Any:
 
         keyword 与 creator 二选一。
         """
+        _err = _need({"platform": platform}, "platform")
+        if _err:
+            return _err
+        if keyword is None and creator is None:
+            return ToolError(
+                code=ErrorCode.INVALID_ARGUMENT,
+                message="keyword 与 creator 至少要提供一个",
+                reason="爆款拆解需要知道「拆解谁」——按关键词拉一批作品，"
+                       "或指定某个创作者拆他的作品。",
+                alternatives=[
+                    "传 keyword=某关键词（拉一批相关作品）",
+                    "传 creator=某创作者 ID（拆这个人的作品）",
+                ],
+            ).to_dict()
         return await _safe(
             svc.analyze_viral(
                 platform=platform,
@@ -342,8 +515,8 @@ def build_app(service: SocialInsightService | None = None) -> Any:
 
     @mcp.tool()
     async def analyze_comments(
-        platform: str,
-        id_or_url: str,
+        platform: str | None = None,
+        id_or_url: str | None = None,
         limit: int = 100,
         top_keywords: int = 30,
     ) -> dict:
@@ -352,6 +525,9 @@ def build_app(service: SocialInsightService | None = None) -> Any:
         确定性算法（bigram 词频 + 情绪词典），结果可复现，不含生成式 AI。
         适合挖掘用户真实需求点、痛点、反对意见。
         """
+        _err = _need({"platform": platform, "id_or_url": id_or_url}, "platform", "id_or_url")
+        if _err:
+            return _err
         return await _safe(
             svc.analyze_comments(
                 platform=platform,
@@ -359,6 +535,26 @@ def build_app(service: SocialInsightService | None = None) -> Any:
                 limit=limit,
                 top_keywords=top_keywords,
             )
+        )
+
+    # ────────────────────────────────────────────────────────────────
+    # 收尾：严格模型兼容归一化（见 _normalize_strict_schemas 注释）
+    #
+    # ⚠️ 探测不到已注册工具时必须**显式告警**——静默跳过等于
+    #    把严格模型拒载的故障悄悄放回去，那正是本轮要修的问题。
+    # ────────────────────────────────────────────────────────────────
+    n_out, n_anyof = _normalize_strict_schemas(mcp)
+    if n_out == 0 and n_anyof == 0 and not _iter_registered_tools(mcp):
+        logger.error(
+            "schema 归一化失败：未探测到已注册工具（fastmcp 版本布局可能已变）。"
+            "严格模型（GLM-5.3-Flash / Deepseek-V4.1-Flash / Step-5-Preview）"
+            "将可能因 outputSchema/anyOf 拒载全部请求，请检查本函数内的布局探测逻辑。"
+        )
+    else:
+        logger.info(
+            "schema 归一化完成：%d 个工具去掉 outputSchema，%d 个工具压平 anyOf",
+            n_out,
+            n_anyof,
         )
 
     return mcp
@@ -381,6 +577,8 @@ async def _safe(coro: Any) -> dict:
             message=f"内部错误：{type(exc).__name__}",
             reason=str(exc)[:500],
         ).to_dict()
+
+
 
 
 def main() -> None:

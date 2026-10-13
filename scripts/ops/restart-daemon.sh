@@ -84,11 +84,30 @@ clear_upgrade_flag() {
 }
 
 while true; do
-  # ── 升级模式：杀掉旧进程 ──
+  # ── 升级模式：优雅停旧进程，再启动新代码 ──
+  #
+  # ⚠️ 实测踩过（2026-10-13，**数据库被写坏**）：
+  #    直接 kill -9 会踩中写库时机。SQLite WAL 模式下 kill -9 本身
+  #    可恢复（WAL 就是为崩溃设计的），但若 kill 瞬间**另一进程正在
+  #    checkpoint**（采集脚本与服务并行写同一个库），
+  #    主库与 WAL 状态脱节 → database disk image is malformed。
+  #    教训：跨进程共享 SQLite 时，kill -9 是赌运气。
+  #
+  # 修法：先 SIGTERM 让进程优雅退出（uvicorn 等请求收尾、关句柄、清 WAL），
+  #      等最多 10s；还活着才 kill -9（此时已给足时间，风险可控）。
   if upgrade_pending; then
-    echo "[$(date '+%F %T')] 检测到升级标记，杀掉旧进程"
+    echo "[$(date '+%F %T')] 检测到升级标记，优雅重启服务"
     for pid in $(service_pids); do
-      proot-distro login ubuntu -- kill -9 "$pid" 2>/dev/null && echo "  已杀 $pid"
+      proot-distro login ubuntu -- kill -TERM "$pid" 2>/dev/null && echo "  已发 SIGTERM 到 $pid"
+    done
+    # 给最多 10s 优雅退出
+    for i in $(seq 1 10); do
+      sleep 1
+      [ -z "$(service_pids)" ] && { echo "  优雅退出完成（${i}s）"; break; }
+    done
+    # 还活着 → 强杀兜底
+    for pid in $(service_pids); do
+      proot-distro login ubuntu -- kill -9 "$pid" 2>/dev/null && echo "  强杀残留 $pid"
     done
     # 等端口真正释放（容器内判断）
     for i in $(seq 1 10); do

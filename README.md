@@ -164,10 +164,25 @@ HOST=0.0.0.0 PORT=8100 .venv/bin/python -m social_insight.http_server
 | 工具 | 说明 |
 |---|---|
 | `capabilities` | 能力矩阵。**建议任何操作前先调一次** |
-| `hot_topics` | 多源热榜聚合 + 交叉验证 |
+| `hot_topics` | 多源热榜聚合 + 交叉验证。默认「少而准」：`topics` 只放 confirmed+likely（≤20 条），single 话题折叠进 `also_on_single`（默认 5 条样本，`single_limit=0` 看全部） |
 | `topic_match` | **热点 × 账号定位匹配**（核心） |
+| `topic_material` | **创作素材**：热点标题 + 精准简要 + 时效 + 来源。按 `query` 取材，给 AI 读着写脚本用 |
 | `trend` | 热点趋势（依赖快照层） |
 | `content_search` 等 7 个 | 平台内容查询（需平台鉴权，见下） |
+
+### `hot_topics` 输出分层（2026-10-13 产品改造）
+
+实测 204 条返回里 186 条是 single（91%），confirmed 只有 3 条——
+用户要「今天值得做的选题」，却被迫在 200 条各站榜单里自己挑。
+**筛选该由服务端做**，所以默认输出改成两层：
+
+| 字段 | 内容 |
+|---|---|
+| `topics` | 只放被 ≥2 个独立源报道的话题（confirmed+likely），按「独立源数 → 最佳排名」排序，默认 ≤20 条（`top_n` 可调） |
+| `also_on_single` | single 话题折叠：只给**数量** + 前 5 条样本 + 说明。想看全部显式 `single_limit=0` |
+
+排序刻意**不用热度值**——跨源热度不可比（抖音 1200万 vs 今日热榜 4），
+用它排序会让大体量源霸榜。跨源可比的只有「几个独立源在报」和「最好排名」。
 
 ### `topic_match` 输出示例
 

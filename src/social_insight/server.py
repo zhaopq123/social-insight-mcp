@@ -93,12 +93,21 @@ TOOL_DEFS: list[dict[str, Any]] = [
             "  · single    —— 仅 1 个源，可能是该站特有\n\n"
             "**已按独立性去重**：镜像源（如 uapis 的抖音榜 = 抖音官方榜）"
             "不会重复计数，避免虚假信心。\n\n"
+            "━━━ 输出分层 ━━━\n"
+            "· ``topics`` 只放 confirmed + likely（多源验证过的），"
+            "默认最多 20 条，按「独立源数 → 最佳排名」排序\n"
+            "· ``also_on_single`` single 话题折叠，只给样本（默认 5 条）"
+            "与总数；想看全部显式 ``single_limit=0``\n\n"
+            "⚠️ 排序不用热度值——跨源热度不可比（抖音 1200万 vs 今日热榜 4），"
+            "用它排序会让大体量源霸榜。\n\n"
             "这是选题的起点：先看哪些话题是全网在火的，再判断哪个适合你的账号。"
         ),
         "inputSchema": _schema(
             sources=("array", _SOURCE_DESC + " 元素为字符串。"),
             limit_per_source=("integer", "每个源最多取多少条（默认 50，上限 100）。"),
             min_sources=("integer", "只返回被至少这么多独立源报道的话题（默认 1）。设 2 可只看交叉验证过的。"),
+            top_n=("integer", "主列表返回条数上限（默认 20）。只影响 confirmed+likely 部分。"),
+            single_limit=("integer", "single 话题返回几条样本（默认 5）。传 0 表示不限、返回全部。"),
         ),
     },
     {
@@ -323,6 +332,8 @@ async def _dispatch(svc: SocialInsightService, name: str, args: dict[str, Any]) 
             sources=args.get("sources"),
             limit_per_source=args.get("limit_per_source", 50),
             min_sources=args.get("min_sources", 1),
+            top_n=args.get("top_n", 20),
+            single_limit=args.get("single_limit", 5),
         )
     if name == "topic_match":
         return await svc.topic_match(
@@ -335,6 +346,9 @@ async def _dispatch(svc: SocialInsightService, name: str, args: dict[str, Any]) 
             top_n=args.get("top_n", 10),
         )
     if name == "topic_material":
+        # ⚠️ topic_material 没有 single_limit 参数——那是 hot_topics 的
+        #    （single 话题折叠样本数）。topic_material 的筛选语义是
+        #    query / min_sources，不要混。
         return await svc.topic_material(
             query=args.get("query"),
             sources=args.get("sources"),

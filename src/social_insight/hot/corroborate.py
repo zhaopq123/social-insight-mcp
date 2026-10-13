@@ -288,7 +288,12 @@ class CorroboratedTopic:
     """独立源数量（不是原始条目数）。"""
 
     sources: list[str] = field(default_factory=list)
-    """报道该话题的源名列表。"""
+    """报道该话题的源名列表（**显示名**，如「微博热搜」）。"""
+
+    #: 源的技术名（如 "uapis:weibo"）——与 sources 一一对应。
+    #: 加它是为了让调用方能拿到稳定标识符（显示名可能改，
+    # 技术名是契约）。2026-10-13 产品改造时补。
+    source_keys: list[str] = field(default_factory=list)
 
     variants: list[str] = field(default_factory=list)
     """各源的原始表述——差异本身有信息量（措辞角度不同）。"""
@@ -304,6 +309,7 @@ class CorroboratedTopic:
             "level": self.level,
             "source_count": self.source_count,
             "sources": self.sources,
+            "source_keys": self.source_keys,
             "variants": self.variants,
             "best_position": self.best_position,
             "max_hot_value": self.max_hot_value,
@@ -458,7 +464,11 @@ def corroborate(
                 word=c["word"],
                 level=_level_of(n),
                 source_count=n,
+                # sources 存**显示名**（给人看的），
+                # source_keys 存**技术名**（契约标识，如 "uapis:weibo"）。
+                # 两者一一对应：显示名可能改，技术名不变。
                 sources=sorted(display_of.get(s, s) for s in c["sources"]),
+                source_keys=sorted(c["sources"]),
                 variants=c["variants"],
                 best_position=c["best_position"],
                 max_hot_value=c["max_hot_value"],
@@ -467,7 +477,11 @@ def corroborate(
             )
         )
 
-    # 排序：独立源数量降序 → 权重降序 → 排名升序
+        # 排序：独立源数量降序 → 权重降序 → 排名升序
+        #
+        # ⚠️ 刻意不用 max_hot_value 参与排序——跨源热度不可比
+        #    （抖音 1200万 vs 今日热榜 4，量纲完全不同）。
+        #    「几个独立源在报」+「最好排名」才是可比的信号。
     out.sort(
         key=lambda t: (
             -t.source_count,
