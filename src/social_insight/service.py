@@ -679,6 +679,193 @@ class SocialInsightService:
         )
 
     # ------------------------------------------------------------------
+    # 创作素材（topic_material）
+    # ------------------------------------------------------------------
+
+    async def topic_material(
+        self,
+        *,
+        query: str | None = None,
+        sources: list[str] | None = None,
+        limit_per_source: int = 50,
+        top_n: int = 15,
+        min_sources: int = 1,
+    ) -> dict[str, Any]:
+        """给 AI 的**创作素材**：热点标题 + 精准简要 + 时效 + 来源。
+
+        ━━━ 定位 ━━━
+
+        这是「帮助创作内容的 MCP」，不是打分工具。
+        调用方（AI）拿这里的材料去**读、去分析、去写脚本**，
+        服务器只负责把「今天什么话题在火、这事是什么」讲清楚。
+
+        `topic_match` 回答「哪个跟我的号有关」（打分）；
+        本工具回答「**这是什么事 + 什么时候的事 + 谁在报**」（事实）。
+
+        ━━━ 为什么不给全文 ━━━
+
+        用户明确要求：**不返回原文**。原因很直接——
+        全文是 AI 的 token 黑洞，也会让上下文爆炸。
+        实测（2026-10-13）：单篇文章 2636 字，
+        而「标题 + 简要」只用 ~120 字就够 AI 理解并创作。
+
+        ━━━ 简要从哪来 ━━━
+
+        实测 9 个热源：**没有任何源提供可用的原生摘要**
+        （掘金 `brief` 字段存在但全为空；其余源只有 title）。
+
+        所以简要由 `hot/brief.py` 的**确定性规则压缩**标题得到：
+          · 规则全部写死可查（R1~R5，每条独立正则）
+          · **绝不添加原文没有的信息**——只做删除/归一化
+            （测试用 Counter 相减形式化验证：新增字符恒为空）
+          · 保险丝：剥离比例 > 50% 或压缩后 < 4 字 → 返回原文
+
+        ━━━ 与 topic_match 的分工 ━━━
+
+        · `topic_material(query="开源REA")` → 按词筛热点，给素材
+        · `topic_material()`（不传 query）→ 今日热点 + 简要
+        """
+
+        from .hot.brief import compress_title
+
+        limit_per_source = _check_bounds("limit_per_source", limit_per_source)
+        top_n = _check_bounds("top_n", top_n)
+        min_sources = _check_bounds("min_sources", min_sources)
+
+        if query is not None and not query.strip():
+            raise ToolError(
+                code=ErrorCode.INVALID_ARGUMENT,
+                message="query 不能是空白字符串",
+                reason="传空字符串会静默变成「不过滤」，与你的预期不符。"
+                       "想取今日热点请**不传**该参数。",
+            )
+
+        # --- 源选择（None 与 [] 必须区分，见 hot_topics 的同样处理）---
+        if sources is None:
+            chosen_sources = DEFAULT_SOURCES
+        elif len(sources) == 0:
+            raise ToolError(
+                code=ErrorCode.INVALID_ARGUMENT,
+                message="sources 不能为空列表",
+                reason="传空列表会静默回退默认源。不传该参数才使用默认源。",
+                alternatives=sorted(FETCHERS),
+            )
+        else:
+            chosen_sources = list(sources)
+
+        unknown = [s for s in chosen_sources if s not in FETCHERS]
+        if unknown:
+            raise ToolError(
+                code=ErrorCode.INVALID_ARGUMENT,
+                message=f"未知热点源：{', '.join(unknown)}",
+                reason="sources 要填**源名**（如 douyin、uapis:weibo），不是平台名。",
+                alternatives=sorted(FETCHERS),
+            )
+
+        topics, failures = await fetch_many(
+            self.http, chosen_sources, limit_per_source=limit_per_source
+        )
+        if not topics:
+            raise ToolError(
+                code=ErrorCode.UPSTREAM_ERROR,
+                message="所有热点源都抓取失败，无法提供素材",
+                details={"failures": failures},
+                retryable=True,
+            )
+
+        # --- 按 query 筛选（不传则返回全部）---
+        if query:
+            q = query.strip().lower()
+            # 用归一化后的标题匹配，避免标点/空格差异导致漏筛
+            from .hot.corroborate import normalize
+
+            matched = [t for t in topics if q in normalize(t.word)]
+            if not matched:
+                # 诚实报告：没匹配到就说没有，**不用泛相关内容填充**
+                raise ToolError(
+                    code=ErrorCode.INVALID_ARGUMENT,
+                    message=f"今日热点里没有与「{query}」相关的话题",
+                    reason="query 与热榜标题做的是**子串匹配**（已归一化，"
+                           "忽略标点/大小写）。可以换个更短或更常见的关键词"
+                           "（如「AI」而非「人工智能大模型」），"
+                           "或者不传 query 取今日全部热点。",
+                    alternatives=[
+                        "换个更短的关键词",
+                        "不传 query 取今日全部热点",
+                        "用 topic_match 做账号维度的匹配",
+                    ],
+                )
+            topics = matched
+
+        # --- 交叉验证（热度与来源的可信度）---
+        corroborated = corroborate(
+            topics,
+            independence_of={k: v["independence"] for k, v in SOURCE_META.items()},
+            weight_of={k: v["weight"] for k, v in SOURCE_META.items()},
+            display_of={k: v["display"] for k, v in SOURCE_META.items()},
+        )
+
+        # 按热度（最大热度值）+ 源数 排序，取前 N
+        from .hot.sources import SOURCE_META as _SM
+
+        def _hot_of(c) -> int:
+            vals = [t.hot_value for t in topics
+                    if t.word == c.word and t.hot_value]
+            return max(vals) if vals else 0
+
+        items: list[dict[str, Any]] = []
+        for c in corroborated:
+            brief, compressed = compress_title(c.word)
+            # 找到该话题对应的原始条目（拿 url 与平台）
+            first = next((t for t in topics if t.word == c.word), None)
+            if first is None:
+                continue
+            items.append({
+                "title": c.word,                    # 原标题（不改写）
+                "brief": brief,                     # 精准简要（确定性压缩）
+                "brief_compressed": compressed,     # 是否真做过精简
+                "source_display": _SM.get(first.platform, {}).get("display", first.platform),
+                "url": first.url or "",
+                "hot_value": _hot_of(c),
+                "independent_source_count": c.source_count,
+                "corroboration": c.level,           # confirmed/likely/single
+                "sources": c.sources,
+            })
+
+        items.sort(key=lambda x: (-x["independent_source_count"], -x["hot_value"]))
+        items = items[:top_n]
+
+        # 落快照（与 hot_topics 一致，让 trend 有数据可用）
+        # ⚠️ _maybe_snapshot 是 async —— 实测踩过：忘了 await，
+        #    Python 只发出 RuntimeWarning 不报错，快照**静默不保存**，
+        #    trend 工具查不到任何历史。这类「静默失效」必须靠测试盯。
+        saved = await self._maybe_snapshot(topics)
+
+        return success(
+            {
+                "query": query,
+                "materials": items,
+                "count": len(items),
+                "brief_note": (
+                    "brief 由确定性规则压缩标题得到（规则可查、绝不添加原文没有的信息）。"
+                    "brief_compressed=false 表示原标题已足够简洁、未做改动。"
+                ),
+                "usage_hint": (
+                    "这些是**素材**，不是结论。请读 title+brief 自行判断："
+                    "① 这事讲的是什么 ② 有没有创作角度 ③ 是否适合你的受众。"
+                    "需要原文细节时才考虑自行打开 url（服务器不返回全文，"
+                    "以避免 token 爆炸）。"
+                ),
+            },
+            meta={
+                "raw_hot_count": len(topics),
+                "sources_requested": chosen_sources,
+                "failures": failures,
+                "snapshots_saved": saved,
+            },
+        )
+
+    # ------------------------------------------------------------------
     # 链路 B · 平台内容
     # ------------------------------------------------------------------
 

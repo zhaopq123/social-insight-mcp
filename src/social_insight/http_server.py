@@ -192,6 +192,43 @@ def build_app(service: SocialInsightService | None = None) -> Any:
         """
         return await _safe(svc.trend(word=word, hours=hours, limit=limit))
 
+    @mcp.tool()
+    async def topic_material(
+        query: str | None = None,
+        sources: list[str] | None = None,
+        limit_per_source: int = 50,
+        top_n: int = 15,
+        min_sources: int = 1,
+    ) -> dict:
+        """**创作素材**：热点标题 + 精准简要 + 时效 + 来源。
+
+        定位：帮助**创作内容**的工具——把「今天什么话题在火、
+        这事到底是什么」讲清楚，供 AI 阅读、分析、写脚本。
+
+        与 topic_match 的分工：
+          · topic_match：按账号定位**打分**，回答「哪个适合我」
+          · topic_material：按关键词**取材**，回答「这是什么事」
+
+        两种用法：
+          · 指定 query：只返回与该词相关的热点（子串匹配，已归一化）
+          · 不传 query：返回今日全部热点
+
+        ⚠️ 不返回原文全文——全文是 token 黑洞，会让上下文爆炸。
+        brief 已包含足够理解话题的信息；确需细节时才自行打开 url。
+
+        ⚠️ brief 由确定性规则压缩得到：规则可查、绝不添加原文没有的信息。
+        brief_compressed=false 表示原标题已足够简洁、未做改动。
+        """
+        return await _safe(
+            svc.topic_material(
+                query=query,
+                sources=sources,
+                limit_per_source=limit_per_source,
+                top_n=top_n,
+                min_sources=min_sources,
+            )
+        )
+
     # ─────────────────── 链路 B · 平台内容 ───────────────────
     @mcp.tool()
     async def content_search(

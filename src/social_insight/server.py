@@ -150,6 +150,34 @@ TOOL_DEFS: list[dict[str, Any]] = [
             limit=("integer", "返回条数（默认 20）。"),
         ),
     },
+    {
+        "name": "topic_material",
+        "description": (
+            "**创作素材**：热点标题 + 精准简要 + 时效 + 来源。\n\n"
+            "定位：这是帮助**创作内容**的工具——把「今天什么话题在火、"
+            "这事到底是什么」讲清楚，供你阅读、分析、写脚本。\n\n"
+            "与 topic_match 的分工：\n"
+            "  · topic_match：按账号定位**打分**，回答「哪个适合我」\n"
+            "  · topic_material：按关键词**取材**，回答「这是什么事」\n\n"
+            "两种用法：\n"
+            "  · 指定 query：只返回与该词相关的热点（子串匹配，已归一化）\n"
+            "  · 不传 query：返回今日全部热点\n\n"
+            "⚠️ 不返回原文全文——全文是 token 黑洞，会让上下文爆炸。"
+            "brief 已包含足够理解话题的信息；确需细节时才自行打开 url。\n\n"
+            "⚠️ brief 由确定性规则压缩得到：规则可查、绝不添加原文没有的信息。"
+            "brief_compressed=false 表示原标题已足够简洁、未做改动。"
+        ),
+        "inputSchema": _schema(
+            query=("string",
+                   "筛选关键词（可选）。与热榜标题做子串匹配，"
+                   "已忽略标点/大小写。不传则返回今日全部热点。"),
+            sources=("array", "指定热点源（源名，如 douyin / uapis:weibo）。"
+                              "不传用默认组合；传空列表会报错。"),
+            limit_per_source=("integer", "每个源抓取条数（默认 50，上限 200）。"),
+            top_n=("integer", "返回条数（默认 15）。"),
+            min_sources=("integer", "最少独立源数（默认 1）。"),
+        ),
+    },
     # ─────────────── 链路 B · 平台内容 ───────────────
     {
         "name": "content_search",
@@ -305,6 +333,14 @@ async def _dispatch(svc: SocialInsightService, name: str, args: dict[str, Any]) 
             sources=args.get("sources"),
             limit_per_source=args.get("limit_per_source", 50),
             top_n=args.get("top_n", 10),
+        )
+    if name == "topic_material":
+        return await svc.topic_material(
+            query=args.get("query"),
+            sources=args.get("sources"),
+            limit_per_source=args.get("limit_per_source", 50),
+            top_n=args.get("top_n", 15),
+            min_sources=args.get("min_sources", 1),
         )
     if name == "trend":
         return await svc.trend(

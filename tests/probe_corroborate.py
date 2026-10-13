@@ -7,7 +7,6 @@
 """
 
 import asyncio
-import io
 import sys
 from pathlib import Path
 

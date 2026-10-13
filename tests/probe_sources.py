@@ -6,7 +6,6 @@
 
 import asyncio
 import sys
-import io
 from pathlib import Path
 
 # 强制 UTF-8 输出，避免 Windows 控制台编码问题

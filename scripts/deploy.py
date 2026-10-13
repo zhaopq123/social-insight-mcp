@@ -320,10 +320,15 @@ def restart_daemons() -> tuple[int, str]:
     sys.path.insert(0, str(Path(__file__).resolve().parent))
     from run_termux import run_termux
 
-    # ⚠️ 注意：run_termux 收的是 **argv 列表**（argv[0]=程序 argv[1]=脚本
-    # argv[2:]=透传参数）。早期版本收单个字符串，签名改过——
-    # 写成 run_termux(str(script)) 会静默拿不到脚本名（然后报「脚本不存在: 」）。
-    code = run_termux(["run_termux.py", str(script)])
+    # ⚠️ --upgrade：让守护循环**杀掉旧进程**再启动新代码。
+    #
+    # 实测踩过（2026-10-13）：部署后验收仍显示 11 个工具（应为 12）。
+    # 新代码已上传，但旧服务进程（已运行 1h18m）仍占着端口，
+    # 守护循环的「端口已监听 → 静默待命」逻辑阻止了新进程启动。
+    #
+    # 所以部署**必须**带升级意图，否则等于没部署。
+    # （run_termux 收 argv 列表，argv[2:] 原样透传）
+    code = run_termux(["run_termux.py", str(script), "--upgrade"])
     return (0, "守护会话已重建") if code == 0 else (code, f"[ERROR] 重建失败 exit={code}")
 
 

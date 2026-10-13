@@ -39,13 +39,66 @@ cat > "$HELPER" <<'GUARD'
 #!/bin/bash
 # 服务守护循环（Termux 层）
 #
-# ━━━ 端口占用时静默等待 ━━━
+# ━━━ ⚠️ 跨层陷阱（实测踩过 2026-10-13）━━━
 #
-# 守护循环刚重建、而旧服务进程还活着时，新进程会因端口占用退出。
-# 旧实现会立刻重试（每 10s）→ 日志刷爆 + proot 反复报警。
-# 现在：检测到 8100 已监听就静默待命，不重复启动。
+# 曾把「端口是否监听」的判断写在 Termux 层：
+#     ss -tln | grep :8100
+# 但 **8100 是容器内的端口，Termux 层根本看不到**——ss 为空 →
+# 判断成「没人监听」→ 启动新进程 → 因端口占用退出 → 循环重启刷屏。
+#
+# 所以凡涉及容器内状态的判断，必须包一层 proot-distro login ubuntu。
+# Termux 层只负责：tmux 会话、守护循环本身、文件标记。
+#
+# ━━━ 两种模式 ━━━
+#
+# 默认：端口已被占用 → 静默待命，不重复启动
+#   （避免守护循环刚重建、旧进程还活着时反复重启）
+#
+# 升级模式（存在 /opt/social-insight-mcp/.upgrade）：
+#   杀掉旧进程 → 启动新代码 → 删标记。
+#   → 部署场景必需，否则新代码永远不生效（实测踩过）
+
+#: 在容器内判断端口（Termux 层看不到容器端口）
+port_busy() {
+  proot-distro login ubuntu -- bash -c \
+    "ss -tln 2>/dev/null | grep -q ':8100 '" 2>/dev/null
+}
+
+#: 在容器内取服务 PID
+service_pids() {
+  proot-distro login ubuntu -- bash -c \
+    "ps aux 2>/dev/null | grep '[s]ocial_insight.http_server' | awk '{print \$2}'" \
+    2>/dev/null | tr -d '[:space:]'
+}
+
+#: 升级标记是否存在（**必须在容器内判断**——标记文件在 /opt 下）
+upgrade_pending() {
+  proot-distro login ubuntu -- bash -c \
+    "[ -f /opt/social-insight-mcp/.upgrade ]" 2>/dev/null
+}
+
+#: 删除升级标记（同样在容器内）
+clear_upgrade_flag() {
+  proot-distro login ubuntu -- bash -c \
+    "rm -f /opt/social-insight-mcp/.upgrade" 2>/dev/null
+}
+
 while true; do
-  if ss -tln 2>/dev/null | grep -q ':8100 '; then
+  # ── 升级模式：杀掉旧进程 ──
+  if upgrade_pending; then
+    echo "[$(date '+%F %T')] 检测到升级标记，杀掉旧进程"
+    for pid in $(service_pids); do
+      proot-distro login ubuntu -- kill -9 "$pid" 2>/dev/null && echo "  已杀 $pid"
+    done
+    # 等端口真正释放（容器内判断）
+    for i in $(seq 1 10); do
+      sleep 1
+      if ! port_busy; then echo "  端口已释放（${i}s）"; break; fi
+    done
+    clear_upgrade_flag
+  fi
+
+  if port_busy; then
     echo "[$(date '+%F %T')] 8100 已监听，守护待命"
     sleep 30
     continue
@@ -58,6 +111,17 @@ while true; do
 done
 GUARD
 chmod +x "$HELPER"
+
+# 若带了升级意图，放升级标记
+# ⚠️ 标记文件在 /opt/... 下 = 容器内路径，Termux 层**写不进去、也看不见**
+#    （实测踩过：直接 touch 静默失败，[ -f ] 永远为假，升级标记从未生效）。
+#    必须经 proot-distro 在容器内创建与判断。
+if [ "${1:-}" = "--upgrade" ] || proot-distro login ubuntu -- \
+     bash -c "[ -f $TARGET/.upgrade ]" 2>/dev/null; then
+  proot-distro login ubuntu -- bash -c "touch $TARGET/.upgrade" \
+    && echo "  → 已放置升级标记，守护循环将重启服务加载新代码" \
+    || echo "  ⚠️ 升级标记创建失败（容器内 touch 失败）"
+fi
 
 tmux new-session -d -s social-insight "$HELPER"
 echo "  ✅ 已创建（端口占用时静默待命，不刷日志）"

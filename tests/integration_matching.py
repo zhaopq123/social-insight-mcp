@@ -4,7 +4,6 @@
 回归测试的价值：以后调阈值时，这些用例会立刻告诉你有没有调坏。
 """
 
-import io
 import sys
 from pathlib import Path
 

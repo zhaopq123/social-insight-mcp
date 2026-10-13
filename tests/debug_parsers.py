@@ -1,7 +1,6 @@
 """调试三个解析失败的源，dump 真实结构。"""
 
 import asyncio
-import io
 import json
 import re
 import sys

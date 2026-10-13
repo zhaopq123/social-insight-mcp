@@ -7,7 +7,6 @@ service 层测试通过 ≠ MCP 能起来。这一层验证：
 """
 
 import asyncio
-import io
 import sys
 from pathlib import Path
 
