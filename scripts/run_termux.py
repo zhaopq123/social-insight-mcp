@@ -25,9 +25,12 @@ import subprocess
 import sys
 from pathlib import Path
 
-SSH_HOST = "192.168.3.35"
-SSH_PORT = "8022"          # Termux 层
-SSH_USER = "zpq"
+# 连接参数统一从 scripts/deploy.py 读取 —— 该模块从 .env / 环境变量加载，
+# 仓库里**不硬编码任何服务器地址**。
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from deploy import SSH_HOST, SSH_USER  # noqa: E402
+
+SSH_PORT = "8022"          # Termux 层（容器层为 2222）
 
 
 def run_termux(argv: list[str]) -> int:

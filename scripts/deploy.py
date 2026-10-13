@@ -3,7 +3,7 @@
 
 ━━━ 环境约束（决定部署方式）━━━
 
-目标机是 vivo 手机上的 Termux + proot-distro Ubuntu 双层结构：
+目标机是 Android 手机上的 Termux + proot-distro Ubuntu 双层结构：
   · **无 systemd** —— systemctl 不存在
   · proot 带 ``--kill-on-exit`` —— 后台脱离型进程活不下来
   · 服务必须**前台运行**，由 Termux 层的守护循环拉起
@@ -33,7 +33,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 REMOTE_TARGET = "/opt/social-insight-mcp"
 
-#: SSH 连接参数（来自 ~/.ssh/config 的 vivo-152-ubuntu）
+#: SSH 连接参数（来自 .env 或环境变量，见 .env.example）
 def _load_dotenv() -> None:
     """从项目根的 .env 读取环境变量（不覆盖已存在的）。
 

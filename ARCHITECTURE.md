@@ -285,7 +285,7 @@ cache(cache_key, response, expires_at)
 ## 6. 部署形态
 
 ```
-vivo 服务器 <your-server>  (Ubuntu)
+部署服务器 <your-server>  (Ubuntu)
 ├── /opt/social-insight-mcp/          本 MCP Server
 │   ├── 容器或 venv
 │   └── data/snapshots.db             SQLite 持久化

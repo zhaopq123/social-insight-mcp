@@ -7,7 +7,7 @@
 
 ━━━ 为什么用 fastmcp 而不是裸 mcp SDK ━━━
 
-目标服务器（vivo <your-server> 的 Ubuntu 容器）上已经跑着 mcp-imagegen，
+目标服务器（<your-server> 的 Ubuntu 容器）上已经跑着 mcp-imagegen，
 用的是 ``fastmcp 4.1.0`` + ``uvicorn``，**版本组合已在真机验证过**。
 复用同一套依赖，避免「在我机器上能跑」的问题。
 

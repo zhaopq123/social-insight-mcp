@@ -242,7 +242,7 @@ HOST=0.0.0.0 PORT=8100 .venv/bin/python -m social_insight.http_server
 ## 开发
 
 ```bash
-python -m pytest                  # 369 个测试
+python -m pytest                  # 521 个测试
 python -m pyflakes src/ tests/    # 应无输出
 ```
 
