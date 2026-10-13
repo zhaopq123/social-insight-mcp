@@ -4,6 +4,7 @@
 
 ```bash
 git clone https://github.com/zhaopq123/social-insight-mcp.git
+# 国内镜像（Gitee，同步更新）：https://gitee.com/zhaopq/social-insight-mcp
 cd social-insight-mcp
 python -m venv .venv
 .venv/bin/pip install -e ".[dev]"     # Linux/macOS
