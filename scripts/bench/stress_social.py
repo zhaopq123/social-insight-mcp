@@ -61,6 +61,23 @@ class McpSession:
         )
 
     async def call(self, name: str, arguments: dict) -> None:
+        """调用工具。
+
+        ⚠️ ReadError 重试一次：服务端 keep-alive 超时（uvicorn 默认 5s）
+        关闭空闲连接后，客户端复用死连接会 read error。这是**客户端侧
+        必须处理的正常现象**（真实 MCP 客户端同样会遇到），不是服务故障。
+        只对连接级错误重试，且只重一次。
+        """
+        for attempt in (0, 1):
+            try:
+                await self._call_once(name, arguments)
+                return
+            except (httpx.ReadError, httpx.RemoteProtocolError, httpx.ConnectError):
+                if attempt == 1:
+                    raise
+                await asyncio.sleep(0.2)
+
+    async def _call_once(self, name: str, arguments: dict) -> None:
         self._id += 1
         r = await self.client.post(
             "/mcp",
@@ -132,7 +149,11 @@ def pct(xs: list[float], p: float) -> float:
 async def worker(client: httpx.AsyncClient, mix, deadline: float, stats: Stats) -> None:
     weights = [w for _, _, w in mix]
     sess = McpSession(client)
-    await sess.start()
+    try:
+        await sess.start()
+    except Exception as exc:  # noqa: BLE001 —— 握手失败不该炸掉整个压测
+        stats.record_error("initialize", f"{type(exc).__name__}: {exc}")
+        return
     while time.monotonic() < deadline:
         tool, args, _ = random.choices(mix, weights=weights)[0]
         t0 = time.monotonic()

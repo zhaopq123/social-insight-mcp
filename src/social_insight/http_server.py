@@ -389,10 +389,12 @@ def main() -> None:
         # （单发仅 50ms / 19 RPS）——堆积比拒绝糟糕得多。
         limit_concurrency=128,
         #
-        # timeout_graceful_shutdown：SIGTERM（重启/部署）后等待
-        # 进行中请求完成的时间，超时才强杀。没有它，重启会硬断
-        # 正在跑的热点查询，客户端看到连接被 reset。
-        timeout_graceful_shutdown=10.0,
+        # ⚠️ timeout_graceful_shutdown 实测有坑（2026-10-13）：
+        # 设 10s 后，runsv 发 TERM 服务器收 21s+ 不退（sv restart 卡超时，
+        # 最终要 kill -9）。根因疑似与 mcp session manager 的 lifespan
+        # shutdown 交互有关。回退默认（None=立即关）——runsv 快速拉起
+        # 的运维模式下，重启瞬断可接受（MCP 客户端协议层自动重连），
+        # "能快速重启"比"优雅等待"更重要。
         #
         # backlog：监听队列深度。多会话同时接入（initialize 握手
         # 突发）时避免连接被拒。

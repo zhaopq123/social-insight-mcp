@@ -378,18 +378,29 @@ class SocialInsightService:
         # 任何请求（包括 capabilities 这种纯内存调用）全部排队。
         # 实测：卸载前 20 并发 mixed 的 capabilities p50=2.45s（单发仅 50ms）。
         # to_thread 后事件循环保持自由，轻请求不再被重请求堵死。
-        results = await asyncio.to_thread(
-            corroborate,
-            topics,
-            independence_of={k: v["independence"] for k, v in SOURCE_META.items()},
-            weight_of={k: v["weight"] for k, v in SOURCE_META.items()},
-            display_of={k: v["display"] for k, v in SOURCE_META.items()},
-            min_sources=min_sources,
+        #
+        # 再套一层 single-flight：同批 topics（同源同 limit 抓的）的
+        # corroborate 结果**完全相同**，hot_topics 与 topic_match
+        # 对同一批数据各算一遍是纯浪费。合并后并发 N 次只算一次。
+        # （CPU 密集任务在 GIL 下无法真正并行，合并是数量级的节省。）
+        corr_key = ("corroborate", flight_key, min_sources)
+        results = await self._fetch_flight.run(
+            corr_key,
+            lambda: asyncio.to_thread(
+                corroborate,
+                topics,
+                independence_of={k: v["independence"] for k, v in SOURCE_META.items()},
+                weight_of={k: v["weight"] for k, v in SOURCE_META.items()},
+                display_of={k: v["display"] for k, v in SOURCE_META.items()},
+                min_sources=min_sources,
+            ),
         )
 
         # 落快照（增值功能，失败不影响主流程）
-        # sqlite 写同样卸载：批量 INSERT ~300 条会阻塞事件循环。
-        saved = await self._maybe_snapshot(topics)
+        # 同批 topics（同 flight_key）只落一次库：
+        # 实测 20 并发下 75 次重复落库（每次 ~300 行 INSERT）会占满
+        # 默认线程池 + WAL 写互斥串行，把 trend 等读操作也堵出秒级排队。
+        saved = await self._maybe_snapshot(topics, flight_key=flight_key)
 
         return success(
             {
@@ -406,7 +417,7 @@ class SocialInsightService:
             },
         )
 
-    async def _maybe_snapshot(self, topics: list[Any]) -> int:
+    async def _maybe_snapshot(self, topics: list[Any], *, flight_key: tuple = ()) -> int:
         """把抓到的热点落快照（若存储层已启用）。
 
         失败**不影响主流程**——快照是增值功能，不是核心能力。
@@ -414,10 +425,19 @@ class SocialInsightService:
 
         sqlite 写在线程里跑：批量 INSERT 是磁盘 IO，
         同步执行会阻塞事件循环（多会话场景下拖累所有轻请求）。
+
+        同批 topics（同 flight_key）并发时只落一次库——
+        秒级内的重复快照对趋势分析毫无价值，重复落库反而
+        会占满线程池并因 WAL 写互斥拖慢所有读操作。
         """
         if self.store is None or not topics:
             return 0
         try:
+            if flight_key:
+                return await self._fetch_flight.run(
+                    ("snapshot", flight_key),
+                    lambda: asyncio.to_thread(self.store.save_hot_topics, topics),
+                )
             return await asyncio.to_thread(self.store.save_hot_topics, topics)
         except Exception:
             # 存储失败不该让热点查询失败
@@ -600,14 +620,18 @@ class SocialInsightService:
                 retryable=True,
             )
 
-        # corroborate + match_topics 都是 CPU 密集（相似度聚类 + 打分），
-        # 卸载到线程保事件循环自由（详见 hot_topics 里的同款注释）。
-        corroborated = await asyncio.to_thread(
-            corroborate,
-            topics,
-            independence_of={k: v["independence"] for k, v in SOURCE_META.items()},
-            weight_of={k: v["weight"] for k, v in SOURCE_META.items()},
-            display_of={k: v["display"] for k, v in SOURCE_META.items()},
+        # corroborate 与 hot_topics 共享同一把 flight：
+        # 同批 topics + 同 min_sources（两边默认都是 1）→ 同一次计算。
+        corr_key = ("corroborate", flight_key, 1)
+        corroborated = await self._fetch_flight.run(
+            corr_key,
+            lambda: asyncio.to_thread(
+                corroborate,
+                topics,
+                independence_of={k: v["independence"] for k, v in SOURCE_META.items()},
+                weight_of={k: v["weight"] for k, v in SOURCE_META.items()},
+                display_of={k: v["display"] for k, v in SOURCE_META.items()},
+            ),
         )
 
         # 交叉验证信息（用于把「火」与「相关」分开呈现）
@@ -622,8 +646,21 @@ class SocialInsightService:
             for c in corroborated
         }
 
-        matches = await asyncio.to_thread(
-            match_topics, topics, acct, corroboration_of=corr_of, top_n=top_n
+        # match_topics 也按 (抓取批次, 账号签名, top_n) 合并：
+        # 同样的账号定位反复匹配同一批热点是纯重复劳动。
+        acct_sig = (
+            acct.name,
+            tuple(acct.keywords),
+            tuple(acct.domains),
+            tuple(acct.platforms),
+            acct.form,
+        )
+        match_key = ("match", flight_key, acct_sig, top_n)
+        matches = await self._fetch_flight.run(
+            match_key,
+            lambda: asyncio.to_thread(
+                match_topics, topics, acct, corroboration_of=corr_of, top_n=top_n
+            ),
         )
 
         return success(
